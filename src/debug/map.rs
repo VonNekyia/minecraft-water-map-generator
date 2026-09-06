@@ -836,8 +836,8 @@ fn inland_color(kind: WaterKind) -> [u8; 3] {
 /// river/lake regions get the sand palette; other kinds keep their base colour.
 fn inland_region_color(kind: WaterKind, modifiers: Modifiers) -> [u8; 3] {
     match (kind, modifiers.contains(Modifiers::DESERT)) {
-        (WaterKind::River, true) => [0xd9, 0xc4, 0x76],
-        (WaterKind::Lake, true) => [0xa3, 0x92, 0x50],
+        (WaterKind::River, true) => [0xea, 0xd7, 0xa0],
+        (WaterKind::Lake, true) => [0xcb, 0xb9, 0x84],
         _ => inland_color(kind),
     }
 }

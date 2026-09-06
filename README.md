@@ -10,13 +10,13 @@ plugins and other tools. Supports vanilla and datapack biomes, including Terrali
 These examples show the same Minecraft world at eight blocks per pixel. Click an
 image for the full-size PNG. The combined map gives ocean zones priority at the coast.
 These samples use source water only with `--max-below-sea-level 10
---min-river-merge 5000 --min-sea-merge 10000`. At sea level 63, water surfaces at
-Y=53 or above are retained, including rivers under mountains. Lower water surfaces
-and flowing/falling water are excluded before classification. This export contains
-11,230 regions (235 seas, 2,889 rivers, 7,440 lakes and 666 swamps). The scan retains
-19,607,677 covered water columns above the cutoff. All 151 tests and 65 binary
-lookup round trips pass. This height rule also keeps shallow covered ponds; it
-does not attempt to distinguish those from mountain passages by sky exposure.
+--min-water-body 2000 --min-river-merge 20000 --min-sea-merge 10000`.
+At sea level 63, water surfaces at Y=53 or above qualify, including water under
+mountains. Flowing/falling water and lower water surfaces are excluded before
+classification; merging and the 2,000-column minimum then remove small regions.
+The current export contains 2,343 regions: 149 seas, 937 rivers, 1,077 lakes and
+180 swamps. The height rule also admits shallow covered ponds; the area floor
+removes small isolated ones. Desert rivers and lakes use lighter sand colours.
 
 ### Combined ocean, river and lake map
 
@@ -195,7 +195,7 @@ validation aids:
 | Normal ocean | `#12326e` | `#091937` |
 | Cold ocean | `#48659c` | `#2b3d5e` |
 | River / lake | River `#3ae1cd` | Lake `#99cacd` |
-| Desert river / lake | River `#d9c476` | Lake `#a39250` |
+| Desert river / lake | River `#ead7a0` | Lake `#cbb984` |
 
 Desert colours use the region's `DESERT` modifier. Swamps retain their existing
 colour. The combined map keeps ocean priority at shared coastal pixels.
@@ -556,10 +556,10 @@ separate from `--ocean-map-min-area`: the latter simplifies only visible ocean
 colour patches (including depth patches) in the ocean and combined PNGs. Changing
 only that visual setting does **not** reduce the exported region count.
 
-A balanced starting point for this world is:
+The current cleaner preset for this world is:
 
 ```bash
-cargo run --release -- --world "/path/to/world" --output ./generated --export-map --max-below-sea-level 10 --min-water-body 200 --min-river-merge 5000 --min-sea-merge 10000 --ocean-map-min-area 10000
+cargo run --release -- --world "/path/to/world" --output ./generated --export-map --max-below-sea-level 10 --min-water-body 2000 --min-river-merge 20000 --min-sea-merge 10000 --ocean-map-min-area 10000
 ```
 
 The command above uses a height cutoff and retains covered mountain rivers.
@@ -570,11 +570,35 @@ them has a much larger effect on the total than changing surface-water labels.
 
 | Setting | Detail-oriented | Balanced | Fewer regions |
 |---------|-----------------|----------|---------------|
-| `--min-water-body` | 100–200 | 200 | Keep 200 initially |
-| `--min-river-merge` | 1000 | 5000 | 10000–20000 |
+| `--min-water-body` | 100–200 | 1000 | 2000 |
+| `--min-river-merge` | 1000–5000 | 10000 | 20000 |
 | `--min-sea-merge` | 0 | 10000 | 25000–50000 |
 | `--ocean-map-min-area` | 2000–5000 | 10000 | 25000–50000 |
 | `--map-scale` | 4 | 8 | 8; larger pixels only simplify PNG output |
+
+### Noise cleanup with the height cutoff
+
+Same world, source water only, `--max-below-sea-level 10`, sea merging 10,000
+and ocean map cleanup 10,000 throughout:
+
+| Minimum region area | River merge area | Rivers | Lakes | Seas | Swamps | Total |
+|---------------------|------------------|--------|-------|------|--------|-------|
+| 200 | 5000 | 2889 | 7440 | 235 | 666 | 11230 |
+| 1000 | 20000 | 1358 | 1577 | 158 | 264 | 3357 |
+| **2000** | **20000** | **937** | **1077** | **149** | **180** | **2343** |
+
+The selected preset produces 79.1% fewer regions. Total exported water area
+falls from 348,324,745 to 344,837,224 columns (1.0%). Excluding seas, the net
+inland-water area decreases by 5.94%. This is a net area comparison,
+not a guarantee that every remaining outline or classification is unchanged.
+Many small lake patches have no touching neighbour, so stronger river merging
+alone cannot remove them. Raising the retention floor lets the existing early
+absorption combine small adjoining pieces and drops remaining undersized regions
+of every kind. It also removes genuine small ponds and isolated stream fragments;
+use 1000 when those matter more than a cleaner overview. Covered mountain passages
+still qualify under the same height rule, rather than being excluded by a roof.
+Both comparison exports passed their binary lookup verification (65 and 66 checks).
+The CLI defaults are unchanged; use the explicit preset above to reproduce these maps.
 
 ### Why small spots can remain visible
 
