@@ -1,0 +1,30 @@
+[package]
+name = "water-analyzer"
+version = "1.0.0"
+edition = "2021"
+description = "Minecraft Java water map generator: classify oceans, rivers, lakes and swamps, and export PNG maps and water-region data."
+license = "MIT"
+repository = "https://github.com/VonNekyia/minecraft-water-map-generator"
+readme = "README.md"
+keywords = ["minecraft", "water", "map-generator", "anvil", "world-analysis"]
+categories = ["command-line-utilities", "visualization"]
+
+[dependencies]
+anyhow = "1"
+bitflags = { version = "2", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+flate2 = "1"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+png = "0.17"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[profile.release.package."*"]
+opt-level = 3
