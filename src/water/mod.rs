@@ -3,6 +3,7 @@
 pub mod absorb;
 pub mod classifier;
 pub mod components;
+pub mod consolidate;
 pub mod grid;
 pub mod kinds;
 pub mod model;

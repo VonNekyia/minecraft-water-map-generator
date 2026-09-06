@@ -240,3 +240,18 @@ public final class WaterRegions {
     }
 }
 ```
+
+## Optional region consolidation
+
+`--min-river-merge` (default 5000) and `--min-sea-merge` (default 0) consolidate
+small adjoining regions of the same water kind after shape correction. The file
+layout/version is unchanged. Geometry is the exact union of the constituent runs;
+no water is filled or erased by consolidation. Temperature, vegetation, modifiers
+and the diagnostic dominant biome represent the larger group. Measured depth,
+maximum depth, surface height and depth contour shares are recomputed from column
+statistics. Region IDs are regenerated and must not be persisted across scans.
+
+The minimum retention size is independent: isolated small components can survive
+a merge threshold and are removed only below `--min-water-body` (or the separate
+cave minimum). The ocean PNG sieve has its own `--ocean-map-min-area` option and
+never changes the binary region count by itself.

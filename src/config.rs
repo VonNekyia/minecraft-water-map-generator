@@ -139,6 +139,12 @@ pub const BANK_MAX_CONTACT_WIDTH: f64 = 32.0;
 /// columns represented by the pixels. Does not alter runtime depth or temperature.
 pub const OCEAN_MAP_MIN_AREA: u64 = 10_000;
 
+/// River regions below this area merge into adjoining river regions, after
+/// shape correction. Independent of the retention threshold; zero disables.
+pub const RIVER_MERGE_MIN_COLUMNS: u32 = 5_000;
+/// Real sea-region consolidation is opt-in; the ocean map sieve is separate.
+pub const SEA_MERGE_MIN_COLUMNS: u32 = 0;
+
 // ---------------------------------------------------------------------------
 // Absorption of small regions into their neighbours
 // ---------------------------------------------------------------------------

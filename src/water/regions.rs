@@ -60,6 +60,10 @@ pub struct RegionStats {
     pub reshaped_to_river: u32,
     pub bank_groups: u32,
     pub bank_columns: u64,
+    pub merged_rivers: u32,
+    pub merged_seas: u32,
+    pub small_rivers: u32,
+    pub small_seas: u32,
     /// Cells the biome-family majority filter reclassified, before anything else.
     pub smoothed_family_cells: u64,
     /// Cells the full-classification majority filter reclassified afterwards.
@@ -288,6 +292,7 @@ pub fn build_regions(
     min_columns: u32,
     min_cave_columns: u32,
     min_sea_columns: u32,
+    merge_options: super::consolidate::MergeOptions,
 ) -> (Vec<WaterRegion>, RegionStats) {
     let mut stats = RegionStats::default();
     if grid.regions.is_empty() {
@@ -508,6 +513,12 @@ pub fn build_regions(
     stats.bank_groups = shape.bank_groups;
     stats.bank_columns = shape.bank_columns;
 
+    // Consolidate after shape correction: bank fragments now have their final
+    // kind. Do this before retention, so tiny connected pieces can be rescued.
+    let (mut regions, merged) = super::consolidate::merge(regions, &accums, registry, merge_options);
+    stats.merged_rivers = merged.merged_rivers;
+    stats.merged_seas = merged.merged_seas;
+
     regions.retain(|r| {
         let min = if r.modifiers.contains(Modifiers::CAVE) {
             min_cave_columns
@@ -520,6 +531,12 @@ pub fn build_regions(
         r.id = i as u32;
         stats.regions += 1;
         stats.by_kind[r.kind as usize] += 1;
+        if r.kind == WaterKind::River && r.geometry.column_count < merge_options.river_min_area {
+            stats.small_rivers += 1;
+        }
+        if r.kind == WaterKind::Sea && r.geometry.column_count < merge_options.sea_min_area {
+            stats.small_seas += 1;
+        }
         if r.modifiers.contains(Modifiers::ICE) {
             stats.with_ice += 1;
         }

@@ -9,6 +9,8 @@ plugins and other tools. Supports vanilla and datapack biomes, including Terrali
 
 These examples show the same Minecraft world at eight blocks per pixel. Click an
 image for the full-size PNG. The combined map gives ocean zones priority at the coast.
+These samples use `--min-river-merge 5000 --min-sea-merge 10000`, the balanced
+settings measured below.
 
 ### Combined ocean, river and lake map
 
@@ -90,7 +92,10 @@ Options:
 | `--export-map` | also write the six debug PNGs (classification, regions, depth, oceans, inland, combined) |
 | `--map-scale <n>` | blocks per pixel in the debug maps, default 8 |
 | `--sea-level <y>` | override the detected sea level |
-| `--min-water-body <n>` | smallest body of water to report, in columns, default 200 |
+| `--min-water-body <n>` | minimum retained water-region area, default 200 columns; final pieces below it are dropped |
+| `--min-river-merge <n>` | merge river regions smaller than N columns into adjoining rivers, default 5000; 0 disables this extra pass |
+| `--min-sea-merge <n>` | merge actual sea regions smaller than N columns into adjoining sea regions, default 0 (off) |
+| `--ocean-map-min-area <n>` | minimum ocean colour-patch area in the overview, default 10000; 0 disables the visual sieve |
 | `--no-caves` | skip water that cannot see the sky |
 | `--min-cave-body <n>` | smallest cave pool to report; defaults to `--min-water-body` |
 | `--min-sea-body <n>` | connected ocean-biome columns needed to be a sea, default 2 000 000 |
@@ -480,6 +485,103 @@ not, and the data says so.
 ### 8. Output
 
 See [FORMAT.md](FORMAT.md) for the binary layout and a minimal Java reader.
+
+## Reducing region count while preserving detail
+
+There are two independent area controls, measured in horizontal water columns
+(one column is one square block of water surface):
+
+* **Retention** (`--min-water-body`, default 200): surviving regions below this
+  size are removed. Raising it can remove isolated ponds, short streams and fine
+  water features. It also controls the earlier tiny-fragment absorption rule.
+* **Merging** (`--min-river-merge`, default 5000): a smaller river region joins an
+  adjoining river of equal or greater current area. No water is removed by this
+  pass, and the exact run geometry is preserved. The threshold does not have to
+  match the retention threshold.
+
+Merging runs after bank and shape correction, so riverbank pieces that previously
+read as lakes are included. The smallest pieces merge first, using the longest
+shared boundary to pick a larger neighbour. Areas and boundaries are updated after
+every merge until no eligible merge remains. There is no four-to-one size ratio
+or fixed round limit in this pass. River never merges into lake, swamp, ocean or
+cave, and disconnected rivers never merge across dry land. A connected river
+component whose *entire* area is under 5000 therefore remains small; the tool
+reports these as `small unmergeable`. Retention can still remove it below 200.
+
+The larger current group supplies temperature, vegetation and modifiers such as
+`DESERT` and `ICE`. Depth, maximum depth, surface height and depth-distribution
+statistics are recomputed from the original column sums. **Higher merge thresholds
+preserve geographic outlines but lose small attribute boundaries.** The combined
+map can therefore lose a short desert-coloured segment without losing the river
+itself. Regions exactly at the threshold are not candidates for merging.
+
+`--min-sea-merge` applies the same rule to actual sea regions in the binary and
+JSON data. It defaults to 0 to preserve the previous data segmentation. This is
+separate from `--ocean-map-min-area`: the latter simplifies only visible ocean
+colour patches (including depth patches) in the ocean and combined PNGs. Changing
+only that visual setting does **not** reduce the exported region count.
+
+A balanced starting point for this world is:
+
+```bash
+cargo run --release -- --world "/path/to/world" --output ./generated --export-map --min-water-body 200 --min-river-merge 5000 --min-sea-merge 10000 --ocean-map-min-area 10000
+```
+
+For surface-water gameplay only, add `--no-caves`; for underground pools as well,
+start with `--min-cave-body 4000` and inspect which smaller cave pools disappear.
+Cave pools dominate the total region count in the example world, so filtering
+them has a much larger effect on the total than changing surface-water labels.
+
+| Setting | Detail-oriented | Balanced | Fewer regions |
+|---------|-----------------|----------|---------------|
+| `--min-water-body` | 100–200 | 200 | Keep 200 initially |
+| `--min-river-merge` | 1000 | 5000 | 10000–20000 |
+| `--min-sea-merge` | 0 | 10000 | 25000–50000 |
+| `--ocean-map-min-area` | 2000–5000 | 10000 | 25000–50000 |
+| `--map-scale` | 4 | 8 | 8; larger pixels only simplify PNG output |
+
+### Measured results on the sample world
+
+Same 2,509 region files, retention minimum 200, caves included. These counts are
+actual data regions, not map colour patches. Zero disables only the new final
+consolidation pass; the earlier noise absorption remains active.
+
+| River merge area | Sea merge area | River regions | Sea regions | All surface regions | Total including caves |
+|------------------|----------------|---------------|-------------|---------------------|-----------------------|
+| 0 | 0 | 3074 | 221 | 4999 | 25413 |
+| **5000** | **10000** | **899** | **182** | **2785** | **23199** |
+| 20000 | 50000 | 782 | 138 | 2624 | 23038 |
+
+The balanced setting removes 70.75% of river region IDs. Raising the river merge
+area fourfold then saves only another 117 river regions. Lakes (1317), swamps
+(387) and cave regions (20414) are unchanged in all three runs. Every run passed
+the binary writer/reader lookup verification.
+
+An independent comparison of the complete run geometry before and after balanced
+consolidation verified **identical sea, river, lake and swamp footprints**, not
+just equal area totals. The geographic detail is intact. Categorical detail does
+change: river temperature labels change on 3.716% of river area, desert labels on
+0.544%, and ice labels on 0.296%. Sea temperature labels change on 0.067% of sea
+area. Lake and swamp labels are unchanged. These figures count changed labels,
+not classification accuracy against manually labelled ground truth.
+
+The balanced binary shrinks from 46,311,888 to 44,810,832 bytes: exact outlines
+still need their runs, and cave geometry dominates the file. Fewer region IDs do
+not imply a proportional reduction in file size. For reducing the total count,
+the 20,414 cave regions are a much bigger lever than the remaining ocean fragments.
+
+Keep `--min-sea-body` at 2,000,000 unless you intend to change which connected
+biome sheets qualify as oceans. It is a sea-versus-lake classification threshold,
+not a region-count control. Likewise, increasing fringe radii or smoothing passes
+can blur river/lake boundaries; use the merge thresholds first. `--map-scale`
+affects PNG resolution and visual patch connectivity, never binary geometry.
+
+For the fewest possible surface regions, the upper bound on useful merging is
+one region per connected water kind. Getting there erases internal temperature,
+ice and desert boundaries. To keep those details with fewer region IDs would need
+a different data representation: a connected water-body ID plus separate local
+attribute layers. The current binary stores one set of categorical attributes per
+region, so some attribute/detail trade-off is unavoidable.
 
 ## Configuration
 

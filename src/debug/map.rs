@@ -37,11 +37,12 @@ const HEADER: [u8; 3] = [126, 198, 255];
 pub struct MapOptions {
     /// Blocks per pixel.
     pub scale: u32,
+    pub ocean_min_area: u64,
 }
 
 impl Default for MapOptions {
     fn default() -> Self {
-        MapOptions { scale: 8 }
+        MapOptions { scale: 8, ocean_min_area: crate::config::OCEAN_MAP_MIN_AREA }
     }
 }
 
@@ -741,6 +742,7 @@ fn paint_ocean(
     grid: &WorldGrid,
     regions: &[WaterRegion],
     p: &Projection,
+    min_area: u64,
 ) {
     let mut codes = vec![super::sieve::EMPTY; p.w * p.h];
     let mut weights = vec![0u64; p.w * p.h];
@@ -760,7 +762,7 @@ fn paint_ocean(
             }
         }
     }
-    let stats = super::sieve::simplify(&mut codes, &weights, p.w, crate::config::OCEAN_MAP_MIN_AREA);
+    let stats = super::sieve::simplify(&mut codes, &weights, p.w, min_area);
     println!("  ocean map cleanup      {} patches merged, {} isolated omitted ({} columns), {} below minimum remain",
         stats.merged, stats.omitted, stats.omitted_columns, stats.remaining_small);
     for (i, code) in codes.into_iter().enumerate() {
@@ -771,7 +773,7 @@ fn paint_ocean(
     }
 }
 
-fn ocean_rows(regions: &[WaterRegion], sea_level: i16, blocks_per_pixel: u32) -> Vec<Row> {
+fn ocean_rows(regions: &[WaterRegion], sea_level: i16, blocks_per_pixel: u32, min_area: u64) -> Vec<Row> {
     let seas = regions.iter().filter(|r| r.kind == WaterKind::Sea).count();
     let shelf = format!("0-{OCEAN_SHELF_MAX}");
     let basin = format!("{}+", OCEAN_SHELF_MAX + 1);
@@ -807,8 +809,8 @@ fn ocean_rows(regions: &[WaterRegion], sea_level: i16, blocks_per_pixel: u32) ->
         note("FROM THE OCEAN BIOME"),
         note("SHADE IS THE MEASURED DEPTH"),
         note("PER 4X4 CELL IN BLOCKS"),
-        note("PATCHES BELOW 10000 MERGED"),
-        note("ISOLATED TINY PATCHES OMITTED"),
+        note(&format!("PATCHES BELOW {min_area} MERGED")),
+        note(if min_area == 0 { "PATCH FILTER DISABLED" } else { "ISOLATED TINY PATCHES OMITTED" }),
         heading("BACKGROUND"),
         entry("LAND OR OTHER WATER", Swatch::Color(BG_LAND)),
         entry("NOT GENERATED", Swatch::Color(BG_VOID)),
@@ -906,8 +908,8 @@ fn inland_rows(regions: &[WaterRegion], blocks_per_pixel: u32) -> Vec<Row> {
 }
 
 /// The ocean key and inland colours, including desert water, in one legend.
-fn combined_rows(regions: &[WaterRegion], sea_level: i16, blocks_per_pixel: u32) -> Vec<Row> {
-    let mut rows = ocean_rows(regions, sea_level, blocks_per_pixel);
+fn combined_rows(regions: &[WaterRegion], sea_level: i16, blocks_per_pixel: u32, min_area: u64) -> Vec<Row> {
+    let mut rows = ocean_rows(regions, sea_level, blocks_per_pixel, min_area);
     rows[0] = heading("OCEAN AND INLAND WATER");
     rows[1] = note("OCEAN TEMPERATURE AND DEPTH");
     rows.splice(8..8, [
@@ -941,9 +943,9 @@ pub fn render(
     let class_rows = classification_rows(regions, sea_level, blocks_per_pixel);
     let map_rows = region_rows(regions, blocks_per_pixel);
     let bathy_rows = depth_rows(sea_level, blocks_per_pixel);
-    let sea_rows = ocean_rows(regions, sea_level, blocks_per_pixel);
+    let sea_rows = ocean_rows(regions, sea_level, blocks_per_pixel, opts.ocean_min_area);
     let land_rows = inland_rows(regions, blocks_per_pixel);
-    let combined_rows = combined_rows(regions, sea_level, blocks_per_pixel);
+    let combined_rows = combined_rows(regions, sea_level, blocks_per_pixel, opts.ocean_min_area);
     let scale = legend_scale(
         p.h,
         class_rows
@@ -1016,7 +1018,7 @@ pub fn render(
 
     let mut ocean = Canvas::new(panel + p.w, height, BG_VOID);
     paint_land(&mut ocean, grid, &p);
-    paint_ocean(&mut ocean, grid, regions, &p);
+    paint_ocean(&mut ocean, grid, regions, &p, opts.ocean_min_area);
     ocean_legend.draw(&mut ocean, panel);
     let d = ocean.write_png(&dir.join("water_ocean_map.png"))?;
 
@@ -1182,7 +1184,7 @@ mod tests {
 
     #[test]
     fn the_ocean_map_only_lists_the_six_zones_and_says_where_they_come_from() {
-        let rows = ocean_rows(&[], 63, 8);
+        let rows = ocean_rows(&[], 63, 8, crate::config::OCEAN_MAP_MIN_AREA);
         let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
         for t in ["WARM", "MEDIUM", "COLD"] {
             let n = text.iter().filter(|s| s.starts_with(t)).count();

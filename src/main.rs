@@ -73,6 +73,18 @@ struct Cli {
     #[arg(long, default_value_t = config::MIN_WATER_BODY_COLUMNS)]
     min_water_body: u32,
 
+    /// Merge river regions below this area into adjoining rivers. Zero disables.
+    #[arg(long, default_value_t = config::RIVER_MERGE_MIN_COLUMNS)]
+    min_river_merge: u32,
+
+    /// Merge actual sea regions below this area. Zero disables (map cleanup is separate).
+    #[arg(long, default_value_t = config::SEA_MERGE_MIN_COLUMNS)]
+    min_sea_merge: u32,
+
+    /// Smallest ocean colour patch in the overview, in water columns. Zero disables.
+    #[arg(long, default_value_t = config::OCEAN_MAP_MIN_AREA)]
+    ocean_map_min_area: u64,
+
     /// Skip water that cannot see the sky. Without this, underground pools and
     /// aquifers are reported as regions carrying the `cave` modifier.
     #[arg(long)]
@@ -144,6 +156,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     println!("  region files     {}", files.len());
     println!("  min water body   {} columns", cli.min_water_body);
     println!("  min sea body     {} columns", cli.min_sea_body);
+    println!("  river merge area {} columns", cli.min_river_merge);
+    println!("  sea merge area   {} columns", cli.min_sea_merge);
+    println!("  ocean map area   {} columns", cli.ocean_map_min_area);
     if cli.no_caves {
         println!("  cave water       skipped");
     } else {
@@ -213,6 +228,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             cli.min_water_body,
             min_cave_body,
             cli.min_sea_body,
+            water::consolidate::MergeOptions {
+                river_min_area: cli.min_river_merge,
+                sea_min_area: cli.min_sea_merge,
+            },
         );
     let regions_seconds = regions_started.elapsed().as_secs_f64();
 
@@ -262,6 +281,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             sea_level,
             &debug::map::MapOptions {
                 scale: cli.map_scale,
+                ocean_min_area: cli.ocean_map_min_area,
             },
         )?);
     }
@@ -312,6 +332,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         region_stats.reshaped_to_lake, region_stats.reshaped_to_river
     );
     println!("  riverbank repair       {} groups, {} columns", region_stats.bank_groups, region_stats.bank_columns);
+    println!("  river regions merged   {}", region_stats.merged_rivers);
+    println!("  sea regions merged     {}", region_stats.merged_seas);
+    println!("  small unmergeable      {} rivers, {} seas", region_stats.small_rivers, region_stats.small_seas);
     println!("  geometry runs          {}", region_stats.geometry_runs);
     println!();
     println!("output");
@@ -513,6 +536,9 @@ mod tests {
             map_scale: 8,
             sea_level: None,
             min_water_body: config::MIN_WATER_BODY_COLUMNS,
+            min_river_merge: config::RIVER_MERGE_MIN_COLUMNS,
+            min_sea_merge: config::SEA_MERGE_MIN_COLUMNS,
+            ocean_map_min_area: config::OCEAN_MAP_MIN_AREA,
             no_caves: false,
             min_cave_body: None,
             min_sea_body: config::SEA_MIN_COLUMNS,

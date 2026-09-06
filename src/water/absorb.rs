@@ -199,7 +199,8 @@ pub fn absorb(
                 }
                 let better = match best {
                     None => true,
-                    Some((_, bw, bs)) => (*weight, other_size) > (bw, bs),
+                    Some((br, bw, bs)) => (*weight, other_size, std::cmp::Reverse(root))
+                        > (bw, bs, std::cmp::Reverse(br)),
                 };
                 if better {
                     best = Some((root, *weight, other_size));
@@ -308,6 +309,17 @@ mod tests {
         // 2 reaches 0 through 1 in a later round.
         assert_eq!(out.group[2], out.group[0]);
         assert_eq!(out.donor[2], 0);
+    }
+
+    #[test]
+    fn equal_targets_are_chosen_independently_of_adjacency_iteration_order() {
+        let sizes = vec![100, 10_000, 10_000];
+        let forward = vec![(0, 1, 10), (0, 2, 10)];
+        let reverse = vec![(0, 2, 10), (0, 1, 10)];
+        let a = absorb(&sizes, &lakes(3), &open(3), &forward, MIN);
+        let b = absorb(&sizes, &lakes(3), &open(3), &reverse, MIN);
+        assert_eq!(a.donor[0], 1);
+        assert_eq!(a.donor, b.donor);
     }
 
     #[test]
