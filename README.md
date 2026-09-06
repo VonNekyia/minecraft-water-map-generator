@@ -136,7 +136,7 @@ validation aids:
   one green-blue backdrop, with the rivers, lakes and swamps picked out against
   it. Inland water is drawn after the sea, because at eight blocks per pixel a
   river shares its pixel with the coast it runs into and would otherwise vanish.
-* `water_ocean_map.png` - the seas on their own in six colours: muted purple, navy and
+* `water_ocean_map.png` - the seas on their own in six colours: muted blue, navy and
   slate blue for warm, medium and cold, each in a shelf and a basin shade.
   Only two depth steps rather than the model's three, because this world's ocean
   depth is sharply bimodal - 93% is deeper than 10 blocks but only 68% deeper than
@@ -156,7 +156,7 @@ validation aids:
 
 | Water | Shelf / regular | Deep / desert lake |
 |-------|-----------------|--------------------|
-| Warm ocean | `#766b80` | `#43394d` |
+| Warm ocean | `#4e5d7c` | `#2b3752` |
 | Normal ocean | `#12326e` | `#091937` |
 | Cold ocean | `#48659c` | `#2b3d5e` |
 | River / lake | River `#3ae1cd` | Lake `#99cacd` |
@@ -539,6 +539,30 @@ them has a much larger effect on the total than changing surface-water labels.
 | `--min-sea-merge` | 0 | 10000 | 25000–50000 |
 | `--ocean-map-min-area` | 2000–5000 | 10000 | 25000–50000 |
 | `--map-scale` | 4 | 8 | 8; larger pixels only simplify PNG output |
+
+### Why small spots can remain visible
+
+`--min-water-body 200` is a retention floor in **square blocks**, not a minimum
+width in blocks or pixels. In the balanced sample export, no region has fewer
+than 200 water columns, and a run-level connectivity audit found all 2,785
+surface regions to be connected.
+
+The merge thresholds do not delete isolated water. The balanced export still has
+273 river regions below 5,000 columns because no adjoining river group remains.
+Lake and swamp regions are not subject to river consolidation; their small bodies
+remain visible above the retention floor. The ocean display sieve separately
+omits isolated sea colour patches below its visual threshold.
+
+At eight blocks per pixel, 200 square blocks occupy only about three full pixels
+of area; a compact 5,000-block patch is about 9 by 9 original-image pixels. Scaling
+a 4,811-pixel-wide image down to a chat or README makes these much smaller still.
+Map colours are not region IDs: a long region can also appear as separate visible
+pieces at overview resolution, particularly where ocean pixels have priority.
+
+Raising `--min-water-body` to 1000 or 2000 makes retention stricter, but removes
+real small ponds and stream sections. Increasing `--min-river-merge` alone cannot
+remove isolated components. Keep 200 when those small water features matter; use
+the region-ID map to distinguish data-region boundaries from the coloured overview.
 
 ### Measured results on the sample world
 

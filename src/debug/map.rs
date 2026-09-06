@@ -722,8 +722,8 @@ fn depth_rows(sea_level: i16, blocks_per_pixel: u32) -> Vec<Row> {
 /// three bands squeezed onto one hue.
 fn ocean_color(temperature: Temperature, deep: bool) -> [u8; 3] {
     match (temperature, deep) {
-        (Temperature::Warm, false) => [0x76, 0x6b, 0x80],
-        (Temperature::Warm, true) => [0x43, 0x39, 0x4d],
+        (Temperature::Warm, false) => [0x4e, 0x5d, 0x7c],
+        (Temperature::Warm, true) => [0x2b, 0x37, 0x52],
         (Temperature::Medium, false) => [0x12, 0x32, 0x6e],
         (Temperature::Medium, true) => [0x09, 0x19, 0x37],
         (Temperature::Cold, false) => [0x48, 0x65, 0x9c],
