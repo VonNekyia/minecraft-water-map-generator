@@ -212,6 +212,12 @@ pub const CORAL_MIN_SHARE: f32 = 0.02;
 /// Share of a region's water cells whose biome is desert-like for `DESERT`.
 pub const DESERT_MIN_SHARE: f32 = 0.4;
 
+/// Dry-country climate fallback for non-frozen land biomes without desert names.
+pub const DRYLAND_MAX_DOWNFALL: f32 = 0.2;
+
+/// Dry land within four biome cells (16 blocks) contributes to desert water.
+pub const DRYLAND_CELL_RADIUS: u8 = 4;
+
 /// Share of a region's water cells whose biome is mangrove-like for `MANGROVE`.
 pub const MANGROVE_MIN_SHARE: f32 = 0.25;
 

@@ -18,6 +18,7 @@
 //! behave exactly like the interior.
 
 use crate::config;
+use rayon::prelude::*;
 use crate::water::grid::WorldGrid;
 use crate::water::kinds::FamilyField;
 use crate::water::model::Temperature;
@@ -29,6 +30,51 @@ pub const TILE_CELLS: usize = 128;
 
 const NO_VALUE: u8 = 0xFF;
 const FAR: u8 = 0xFF;
+
+/// Attribute-only proximity to arid surface land. This never changes water
+/// masks, classification signatures, smoothing votes or connected components.
+pub struct DrylandProximity {
+    tiles: Vec<Vec<bool>>,
+}
+
+impl DrylandProximity {
+    pub fn build(grid: &WorldGrid) -> Self {
+        let halo = config::DRYLAND_CELL_RADIUS as usize;
+        let side = TILE_CELLS + 2 * halo;
+        let tiles = grid.regions.par_iter().map(|region| {
+            let mut field = Field::new(side * side);
+            let mut any = false;
+            for gz in 0..side {
+                for gx in 0..side {
+                    let wx = region.region_x * 512 + (gx as i32 - halo as i32) * 4;
+                    let wz = region.region_z * 512 + (gz as i32 - halo as i32) * 4;
+                    let Some(land) = grid.region(wx >> 9, wz >> 9) else { continue };
+                    let chunk = (((wz & 511) >> 4) * 32 + ((wx & 511) >> 4)) as usize;
+                    let cell = (((wz & 15) >> 2) * 4 + ((wx & 15) >> 2)) as usize;
+                    if land.dryland_cell(chunk, cell) {
+                        field.seed(gz * side + gx, 1, 0);
+                        any = true;
+                    }
+                }
+            }
+            if any { field.transform(side); }
+            let mut near = vec![false; TILE_CELLS * TILE_CELLS];
+            for z in 0..TILE_CELLS {
+                for x in 0..TILE_CELLS {
+                    near[z * TILE_CELLS + x] = field.dist[(z + halo) * side + x + halo]
+                        <= config::DRYLAND_CELL_RADIUS;
+                }
+            }
+            near
+        }).collect();
+        Self { tiles }
+    }
+
+    pub fn at_world(&self, grid: &WorldGrid, x: i32, z: i32) -> bool {
+        let Some(slot) = grid.region_slot(x >> 9, z >> 9) else { return false };
+        self.tiles[slot][(((z & 511) >> 2) * 128 + ((x & 511) >> 2)) as usize]
+    }
+}
 
 /// What a land-biome column found next to it, if anything.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -281,6 +327,22 @@ mod tests {
                 land
             }
         })])
+    }
+
+    #[test]
+    fn dry_only_neighbour_is_seen_across_negative_tile_boundary_without_water() {
+        let mut land = RegionWater::new(-1, -1);
+        // Last 4x4 cell of the dry region: world (-4, -4).
+        land.set_dryland(1023, 1 << 15);
+        let grid = WorldGrid::build(vec![land, RegionWater::new(0, 0)]);
+        let map = DrylandProximity::build(&grid);
+        assert!(map.at_world(&grid, -4, -4));
+        assert!(map.at_world(&grid, 0, 0));
+        assert!(map.at_world(&grid, 12, 12), "four cells from the dry bank");
+        assert!(!map.at_world(&grid, 16, 12), "beyond the configured radius");
+        assert!(!map.at_world(&grid, 12, 16));
+        assert!(!map.at_world(&grid, 512, 512), "missing region");
+        assert!(grid.regions.iter().all(|r| r.is_empty() && r.water_columns() == 0));
     }
 
     #[test]

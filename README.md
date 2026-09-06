@@ -9,13 +9,15 @@ plugins and other tools. Supports vanilla and datapack biomes, including Terrali
 
 These examples show the same Minecraft world at eight blocks per pixel. Click an
 image for the full-size PNG. The combined map gives ocean zones priority at the coast.
-These samples use source water only with `--max-below-sea-level 10
+These samples use source water and raw mud with `--max-below-sea-level 10
 --min-water-body 2000 --min-river-merge 20000 --min-sea-merge 10000`.
 At sea level 63, water surfaces at Y=53 or above qualify, including water under
 mountains. Flowing/falling water and lower water surfaces are excluded before
 classification; merging and the 2,000-column minimum then remove small regions.
-The current export contains 2,343 regions: 149 seas, 937 rivers, 1,077 lakes and
-180 swamps. The height rule also admits shallow covered ponds; the area floor
+The current export contains 2,336 regions: 148 seas, 955 rivers, 1,081 lakes and
+152 swamps. Raw mud expands the retained swamp area from 1.84 to 7.89 million
+square blocks; the dry-country modifier now applies to 498 regions.
+The height rule also admits shallow covered ponds; the area floor
 removes small isolated ones. Desert rivers and lakes use lighter sand colours.
 
 ### Combined ocean, river and lake map
@@ -86,6 +88,13 @@ Levels 1-15 (flowing and falling water), the `flowing_water` block name, and
 water states with missing or invalid levels are excluded. Waterlogged blocks,
 kelp, seagrass and bubble columns continue to count as water-containing blocks.
 This can break a connection made solely by a waterfall or flowing stream.
+
+Raw `minecraft:mud` also counts as water, so muddy swamp surfaces are included
+even where the world has no fluid blocks. Mud uses the same height cutoff,
+connectivity and minimum-area rules as water; the biome still determines whether
+the region is a swamp. Mud beneath source water contributes to the measured
+depth. Dry `packed_mud`, `mud_bricks` and `muddy_mangrove_roots` do not count
+unless waterlogged.
 
 Use `--max-below-sea-level 10`, as in the examples, to retain water whose
 **topmost water block Y is at least `sea_level - 10`**. At sea level 63 this means
@@ -510,8 +519,8 @@ not, and the data says so.
   dissolve into the cold ocean next to it.
 * `CORALS` - living coral blocks / fans found near the ocean floor. Dead coral does
   not count.
-* `DESERT` - inland water in desert country. It stays a `lake`; `desert` is a
-  modifier, never a kind.
+* `DESERT` - inland water in dry country, including canyons, badlands, savannas
+  and low-rainfall land biomes. It retains its water kind; `desert` is a modifier.
 * `MANGROVE` - mangrove water. Also a modifier; the kind stays `swamp`.
 * `CAVE` - the water cannot see the sky. Cave regions are always `lake` - there is
   no sea, river or swamp without a sky - and they never merge with water above
@@ -570,16 +579,17 @@ them has a much larger effect on the total than changing surface-water labels.
 
 | Setting | Detail-oriented | Balanced | Fewer regions |
 |---------|-----------------|----------|---------------|
-| `--min-water-body` | 100–200 | 1000 | 2000 |
-| `--min-river-merge` | 1000–5000 | 10000 | 20000 |
-| `--min-sea-merge` | 0 | 10000 | 25000–50000 |
-| `--ocean-map-min-area` | 2000–5000 | 10000 | 25000–50000 |
+| `--min-water-body` | 100â€“200 | 1000 | 2000 |
+| `--min-river-merge` | 1000â€“5000 | 10000 | 20000 |
+| `--min-sea-merge` | 0 | 10000 | 25000â€“50000 |
+| `--ocean-map-min-area` | 2000â€“5000 | 10000 | 25000â€“50000 |
 | `--map-scale` | 4 | 8 | 8; larger pixels only simplify PNG output |
 
 ### Noise cleanup with the height cutoff
 
-Same world, source water only, `--max-below-sea-level 10`, sea merging 10,000
-and ocean map cleanup 10,000 throughout:
+Historical comparison before raw mud was included: same world, source water
+only, `--max-below-sea-level 10`, sea merging 10,000 and ocean map cleanup 10,000
+throughout:
 
 | Minimum region area | River merge area | Rivers | Lakes | Seas | Swamps | Total |
 |---------------------|------------------|--------|-------|------|--------|-------|
@@ -598,7 +608,8 @@ of every kind. It also removes genuine small ponds and isolated stream fragments
 use 1000 when those matter more than a cleaner overview. Covered mountain passages
 still qualify under the same height rule, rather than being excluded by a roof.
 Both comparison exports passed their binary lookup verification (65 and 66 checks).
-The CLI defaults are unchanged; use the explicit preset above to reproduce these maps.
+The CLI defaults are unchanged. The current samples use the same explicit preset,
+with the dry-country and raw-mud detection described above.
 
 ### Why small spots can remain visible
 
@@ -685,6 +696,20 @@ correctly with no code change. Family and traits (ocean / river / swamp, frozen,
 desert, mangrove, jungle) are derived from the resource location, so an unknown
 modded biome still lands somewhere sensible. `--debug` reports any biome name the
 registry did not know.
+
+The desert map category covers dry country generally: canyon, savanna, badlands,
+mesa and the existing desert/arid names qualify. Other land biomes qualify when
+`downfall <= 0.2` and `temperature >= 0.25`, excluding frozen and cave biomes.
+These limits use biome metadata, not the world's current weather.
+
+River biomes can keep a neutral name even inside a canyon. The scanner therefore
+records dry surface-biome cells in all chunks, including chunks with no water.
+Inland regions also receive dry-country evidence from banks within four biome
+cells (16 blocks, including diagonals), across chunk and region-file boundaries.
+At least 40% of a region's columns must have direct or nearby dry-country evidence
+to receive `DESERT`. This changes the modifier without splitting regions or
+expanding water outlines. Tune `DRYLAND_MAX_DOWNFALL`, `DRYLAND_CELL_RADIUS` and
+`DESERT_MIN_SHARE` in `src/config.rs` to adjust those rules.
 
 ## Tests
 

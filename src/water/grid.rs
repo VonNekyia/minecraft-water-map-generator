@@ -81,6 +81,9 @@ pub struct RegionWater {
     /// Index into `chunks`, `u16::MAX` when the chunk holds no water.
     index: Box<[u16; CHUNKS_PER_REGION]>,
     chunks: Vec<ChunkWater>,
+    /// Arid surface-land biome cells, including chunks with no retained water.
+    /// Kept separately so reading riverbanks never creates extra water geometry.
+    dryland: Box<[u16; CHUNKS_PER_REGION]>,
 }
 
 #[allow(dead_code)]
@@ -91,6 +94,7 @@ impl RegionWater {
             region_z,
             index: Box::new([u16::MAX; CHUNKS_PER_REGION]),
             chunks: Vec::new(),
+            dryland: Box::new([0; CHUNKS_PER_REGION]),
         }
     }
 
@@ -98,6 +102,14 @@ impl RegionWater {
         debug_assert!(self.chunks.len() < u16::MAX as usize);
         self.index[chunk_index] = self.chunks.len() as u16;
         self.chunks.push(data);
+    }
+
+    pub fn set_dryland(&mut self, chunk_index: usize, mask: u16) {
+        self.dryland[chunk_index] = mask;
+    }
+
+    pub fn dryland_cell(&self, chunk_index: usize, cell: usize) -> bool {
+        self.dryland[chunk_index] & (1 << cell) != 0
     }
 
     #[inline]

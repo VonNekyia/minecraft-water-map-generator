@@ -15,7 +15,7 @@ pub enum BlockClass {
     Solid = 0,
     Air = 1,
     /// Source water, waterlogged blocks and blocks that always contain water
-    /// (kelp, seagrass, bubble columns, ...).
+    /// (kelp, seagrass, bubble columns, ...), plus raw mud used as swamp water.
     Water = 2,
     /// Ice variants. Above water these produce the `ICE` modifier.
     Ice = 3,
@@ -99,7 +99,7 @@ pub fn classify(name: &str, waterlogged: bool, water_level: Option<u8>) -> Block
     if ICE_BLOCKS.contains(&id) {
         return BlockClass::Ice;
     }
-    if WATERY_BLOCKS.contains(&id) {
+    if id == "mud" || WATERY_BLOCKS.contains(&id) {
         return BlockClass::Water;
     }
     if waterlogged {
@@ -142,6 +142,19 @@ mod tests {
         assert!(classify("minecraft:water", false, Some(0)).is_water());
         assert!(classify("minecraft:oak_stairs", true, None).is_water());
         assert!(classify("minecraft:kelp", false, None).is_water());
+    }
+
+    #[test]
+    fn raw_mud_counts_but_dry_mud_building_blocks_do_not() {
+        assert!(classify("minecraft:mud", false, None).is_water());
+        for name in [
+            "minecraft:packed_mud",
+            "minecraft:mud_bricks",
+            "minecraft:muddy_mangrove_roots",
+        ] {
+            assert!(!classify(name, false, None).is_water(), "{name}");
+            assert!(classify(name, true, None).is_water(), "waterlogged {name}");
+        }
     }
 
     #[test]

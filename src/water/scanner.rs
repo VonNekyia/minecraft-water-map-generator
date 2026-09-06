@@ -3,16 +3,16 @@
 //! The scan is deliberately heightmap driven. For every column we read
 //! `MOTION_BLOCKING` (highest fluid or motion blocking block) and `OCEAN_FLOOR`
 //! (highest motion blocking non-fluid block). Their difference already tells us
-//! whether a column holds surface water, so only a *single* block state per
-//! column has to be decoded to confirm it. Deeper probing happens only for the
-//! rare columns where a thin cover - ice, snow, a lily pad - hides the water from
-//! the heightmaps.
+//! whether a column holds surface fluid. The surface block is also checked when
+//! the heights match, because raw mud counts as swamp water despite being solid
+//! to Minecraft's heightmaps. Deeper probing handles mud beds and thin covers
+//! such as ice, snow and lily pads.
 
 use std::path::Path;
 
 use crate::config;
 use crate::water::grid::{CellInfo, ChunkFlags, ChunkWater, RegionWater};
-use crate::world::biome::{BiomeFamily, BiomeRegistry, UNKNOWN_BIOME};
+use crate::world::biome::{BiomeFamily, BiomeRegistry, BiomeTraits, UNKNOWN_BIOME};
 use crate::world::blocks::BlockClass;
 use crate::world::chunk::{
     self, ChunkScratch, PaletteEntry, ParsedChunk, SectionFacts, SectionMeta, SectionReader,
@@ -298,6 +298,10 @@ pub fn scan_region_file(
         };
         stats.chunks_full += 1;
 
+        // Surface-land metadata is independent of water. Dry banks in a wholly
+        // dry chunk must still be available to a river in the neighbouring chunk.
+        water.set_dryland(raw.index, scan_dryland(&buf, &parsed, &ctx.scratch, registry, &mut ctx.mb));
+
         let scanned = scan_chunk(
             &buf,
             &parsed,
@@ -318,6 +322,32 @@ pub fn scan_region_file(
     ctx.buf = buf;
 
     Ok(Some(RegionScan { water, stats }))
+}
+
+/// Samples only surface biome metadata; this never sets a water-mask bit.
+fn scan_dryland(
+    buf: &[u8], parsed: &ParsedChunk, scratch: &ChunkScratch,
+    registry: &BiomeRegistry, heights: &mut [u16; 256],
+) -> u16 {
+    let hm = &parsed.heightmaps;
+    let surface = if hm.motion_blocking.longs > 0 { hm.motion_blocking } else { hm.world_surface };
+    if !chunk::decode_heightmap(buf, surface, heights) { return 0; }
+    let mut mask = 0;
+    for cell in 0..16 {
+        let x = (cell % 4) * 4;
+        let z = (cell / 4) * 4;
+        let h = heights[z * 16 + x];
+        if h == 0 { continue; }
+        let y = parsed.min_y() + i32::from(h) - 1;
+        let Some(section) = scratch.sections.iter().find(|s| s.y == (y >> 4)) else { continue };
+        let Some(name) = chunk::biome_name_at(buf, &scratch.palette, section, x, (y & 15) as usize, z) else { continue };
+        if registry.info(registry.id_of(name)).is_some_and(|info|
+            info.family == BiomeFamily::Land && info.traits.contains(BiomeTraits::DESERT))
+        {
+            mask |= 1 << cell;
+        }
+    }
+    mask
 }
 
 /// Water column found by one column probe.
@@ -392,8 +422,13 @@ fn scan_chunk(
     };
 
     cache.reset(sections);
-    let (classify_lo, classify_hi) = if options.caves {
-        // Cave water can sit anywhere below the surface, so every palette matters.
+    let has_mud = scratch.palette.iter().any(|entry|
+        crate::world::blocks::strip_namespace(entry.name(buf)) == "mud");
+    let (classify_lo, classify_hi) = if options.caves || has_mud {
+        // Cave water can sit anywhere below the surface. Mud also needs all
+        // palettes: solid heightmaps cannot bound its surface or bed, especially
+        // beside taller terrain. This only classifies palettes; without caves
+        // enabled the column probes still start at exposed surfaces only.
         (i32::MIN / 2, i32::MAX / 2)
     } else {
         (band_lo, max_top)
@@ -626,6 +661,12 @@ fn probe_column(
 
     if class.is_water() {
         let floor_y = match floor_hint {
+            // Mud is motion blocking, so OCEAN_FLOOR can point into a bed that
+            // belongs to our water mask. Continue through that bed rather than
+            // treating its top as the end of the accepted water column.
+            Some(f) if f < top && cache.class_at(buf, sections, x, f, z).is_water() => {
+                probe_floor(buf, sections, cache, x, z, f)
+            }
             Some(f) if f < top => f,
             _ => probe_floor(buf, sections, cache, x, z, top),
         };
@@ -714,6 +755,259 @@ fn biome_at(
 mod tests {
     use super::*;
     use crate::world::chunk::{Heightmaps, PackedRef};
+
+    /// A section at Y=48..63 with real packed block data and both heightmaps.
+    /// Four strips contain exposed mud, water over mud, water over stone, and
+    /// excluded flowing water / packed mud. `mud_only` makes the entire chunk
+    /// exposed mud, so MOTION_BLOCKING equals OCEAN_FLOOR everywhere.
+    fn swamp_fixture(mud_only: bool) -> (Vec<u8>, ChunkScratch, ParsedChunk) {
+        let mut buf = Vec::new();
+        let mut scratch = ChunkScratch::new();
+        for (name, water_level) in [
+            ("minecraft:air", None),
+            ("minecraft:stone", None),
+            ("minecraft:mud", None),
+            ("minecraft:water", Some(0)),
+            ("minecraft:water", Some(1)),
+            ("minecraft:packed_mud", None),
+            ("minecraft:swamp", None),
+        ] {
+            scratch.palette.push(PaletteEntry {
+                off: buf.len() as u32,
+                len: name.len() as u16,
+                waterlogged: false,
+                water_level,
+            });
+            buf.extend_from_slice(name.as_bytes());
+        }
+        let block_off = buf.len() as u32;
+        for y in 0..16 {
+            for _z in 0..16 {
+                let mut word = 0u64;
+                for x in 0..16 {
+                    let strip = if mud_only { 0 } else { x / 4 };
+                    let palette_index = match (strip, y) {
+                        (_, 0..=3) => 1, // Stone at Y<=51.
+                        (0 | 1, 4..=5) => 2, // Mud at Y=52..53.
+                        (1 | 2, 6..=7) => 3, // Source water at Y=54..55.
+                        (2, 4..=5) => 1,
+                        (3, 4..=5) if x < 14 => 1,
+                        (3, 6..=7) if x < 14 => 4, // Flowing water.
+                        (3, 4..=7) => 5, // Dry packed mud.
+                        _ => 0,
+                    };
+                    word |= palette_index << (x * 4);
+                }
+                buf.extend_from_slice(&word.to_be_bytes());
+            }
+        }
+        scratch.sections.push(SectionMeta {
+            y: 3,
+            block_pal: (0, 6),
+            block_data: PackedRef {
+                off: block_off,
+                longs: 256,
+            },
+            biome_pal: (6, 1),
+            biome_data: PackedRef::default(),
+        });
+        let mut heightmap = |motion: bool| {
+            let off = buf.len() as u32;
+            for group in 0..37 {
+                let mut word = 0u64;
+                for k in 0..7 {
+                    let i = group * 7 + k;
+                    let x = i % 16;
+                    let height = if i >= 256 {
+                        0
+                    } else if mud_only || x < 4 {
+                        6
+                    } else if motion || x >= 14 {
+                        8
+                    } else {
+                        6
+                    };
+                    word |= height << (k * 9);
+                }
+                buf.extend_from_slice(&word.to_be_bytes());
+            }
+            PackedRef { off, longs: 37 }
+        };
+        let motion_blocking = heightmap(true);
+        let ocean_floor = heightmap(false);
+        let parsed = ParsedChunk {
+            x: 0,
+            z: 0,
+            min_section_y: 3,
+            data_version: 0,
+            full: true,
+            heightmaps: Heightmaps {
+                motion_blocking,
+                ocean_floor,
+                world_surface: PackedRef::default(),
+            },
+        };
+        (buf, scratch, parsed)
+    }
+
+    #[test]
+    fn dry_surface_biomes_are_recorded_even_when_the_chunk_has_no_water() {
+        let (mut buf, mut scratch, parsed) = swamp_fixture(true);
+        let registry = BiomeRegistry::vanilla_only();
+        assert_eq!(scan_dryland(&buf, &parsed, &scratch, &registry, &mut [0; 256]), 0);
+        // Reuse the packed heightmap, but make every block solid and set the
+        // surface biome to savanna. No wet chunk will be inserted for this bank.
+        scratch.sections[0].block_pal = (1, 1);
+        let name = "minecraft:savanna";
+        scratch.palette[6].off = buf.len() as u32;
+        scratch.palette[6].len = name.len() as u16;
+        buf.extend_from_slice(name.as_bytes());
+        assert_eq!(scan_dryland(&buf, &parsed, &scratch, &registry, &mut [0; 256]), u16::MAX);
+        assert!(scan_chunk(
+            &buf, &parsed, &registry, &scratch, &mut SectionCache::default(),
+            &mut [0; 256], &mut [0; 256], &mut ScanStats::default(),
+            ScanOptions { caves: true, min_surface_y: Some(53) },
+        ).is_none());
+    }
+
+    #[test]
+    fn exposed_mud_is_found_when_both_heightmaps_match() {
+        let (buf, scratch, parsed) = swamp_fixture(true);
+        let registry = BiomeRegistry::build(Path::new("__test_world_not_present__"));
+        let cw = scan_chunk(
+            &buf,
+            &parsed,
+            &registry,
+            &scratch,
+            &mut SectionCache::default(),
+            &mut [0; 256],
+            &mut [0; 256],
+            &mut ScanStats::default(),
+            ScanOptions { caves: false, min_surface_y: None },
+        ).expect("exposed swamp mud must count even without a heightmap fluid gap");
+        assert_eq!(cw.water_cols, 256);
+        for cell in &cw.cells {
+            assert_eq!(cell.surface_y, 53);
+            assert_eq!(cell.depth, 2);
+            assert_eq!(cell.biome, registry.id_of("minecraft:swamp"));
+            assert_eq!(cell.cave_cols, 0);
+        }
+    }
+
+    #[test]
+    fn exposed_mud_beside_tall_terrain_is_probed_across_section_boundaries() {
+        let registry = BiomeRegistry::vanilla_only();
+        for water_above_mud in [false, true] {
+            let (mut buf, mut scratch, mut parsed) = swamp_fixture(true);
+            scratch.sections.clear();
+            parsed.min_section_y = 0;
+            for sy in 0..=6 {
+                let off = buf.len() as u32;
+                for local_y in 0..16 {
+                    let y = sy * 16 + local_y;
+                    for _z in 0..16 {
+                        let mut word = 0u64;
+                        for x in 0..16 {
+                            let palette_index = if y <= 4 || (x >= 8 && y == 100)
+                                || ((8..12).contains(&x) && y <= 100)
+                            {
+                                1
+                            } else if (5..=16).contains(&y) {
+                                2
+                            } else if water_above_mud && (4..8).contains(&x) && y == 17 {
+                                3
+                            } else {
+                                0
+                            };
+                            word |= palette_index << (x * 4);
+                        }
+                        buf.extend_from_slice(&word.to_be_bytes());
+                    }
+                }
+                scratch.sections.push(SectionMeta {
+                    y: sy,
+                    block_pal: (0, 6),
+                    block_data: PackedRef { off, longs: 256 },
+                    biome_pal: (6, 1),
+                    biome_data: PackedRef::default(),
+                });
+            }
+            let mut heightmap = |motion: bool| {
+                let off = buf.len() as u32;
+                for group in 0..37 {
+                    let mut word = 0u64;
+                    for k in 0..7 {
+                        let i = group * 7 + k;
+                        let x = i % 16;
+                        let height = if i >= 256 { 0 }
+                            else if x >= 8 { 101 }
+                            else if motion && water_above_mud && x >= 4 { 18 }
+                            else { 17 };
+                        word |= height << (k * 9);
+                    }
+                    buf.extend_from_slice(&word.to_be_bytes());
+                }
+                PackedRef { off, longs: 37 }
+            };
+            parsed.heightmaps.motion_blocking = heightmap(true);
+            parsed.heightmaps.ocean_floor = heightmap(false);
+            let mut stats = ScanStats::default();
+            let cw = scan_chunk(
+                &buf, &parsed, &registry, &scratch, &mut SectionCache::default(),
+                &mut [0; 256], &mut [0; 256], &mut stats,
+                ScanOptions { caves: false, min_surface_y: None },
+            ).expect("exposed mud at Y16 must not be hidden by neighbouring terrain at Y100");
+            assert_eq!(cw.water_cols, 128);
+            assert_eq!(stats.cave_columns, 0);
+            for z in 0..16 {
+                for x in 0..16 {
+                    assert_eq!(cw.get(x, z), x < 8, "covered mud must remain excluded");
+                }
+            }
+            for row in 0..4 {
+                assert_eq!(cw.cells[row * 4].depth, 12, "mud bed continues into section 0");
+                assert_eq!(cw.cells[row * 4].surface_y, 16);
+                assert_eq!(cw.cells[row * 4 + 1].depth, 12 + u16::from(water_above_mud));
+                assert_eq!(cw.cells[row * 4 + 1].surface_y, 16 + i16::from(water_above_mud));
+            }
+        }
+    }
+
+    #[test]
+    fn mud_depth_and_height_cutoff_preserve_source_only_water_rule() {
+        let (buf, scratch, parsed) = swamp_fixture(false);
+        let registry = BiomeRegistry::build(Path::new("__test_world_not_present__"));
+        for (minimum, expected_columns) in [(53, 192), (54, 128), (56, 0)] {
+            let cw = scan_chunk(
+                &buf,
+                &parsed,
+                &registry,
+                &scratch,
+                &mut SectionCache::default(),
+                &mut [0; 256],
+                &mut [0; 256],
+                &mut ScanStats::default(),
+                ScanOptions { caves: true, min_surface_y: Some(minimum) },
+            );
+            if expected_columns == 0 {
+                assert!(cw.is_none());
+                continue;
+            }
+            let cw = cw.unwrap();
+            assert_eq!(cw.water_cols, expected_columns);
+            for z in 0..16 {
+                for x in 0..16 {
+                    assert_eq!(cw.get(x, z), x < 12 && (minimum <= 53 || x >= 4));
+                }
+            }
+            for row in 0..4 {
+                assert_eq!(cw.cells[row * 4 + 1].surface_y, 55);
+                assert_eq!(cw.cells[row * 4 + 1].depth, 4, "include the mud bed beneath water");
+                assert_eq!(cw.cells[row * 4 + 2].depth, 2, "ordinary water depth stays unchanged");
+                assert_eq!(cw.cells[row * 4 + 3].water_cols, 0, "flowing water and dry packed mud stay excluded");
+            }
+        }
+    }
 
     #[test]
     fn height_rule_keeps_covered_sources_and_excludes_flowing_water() {

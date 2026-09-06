@@ -34,7 +34,7 @@ pub enum BiomeFamily {
 }
 
 bitflags::bitflags! {
-    /// Environmental traits derived from the biome name.
+    /// Environmental traits derived from biome names and climate metadata.
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
     pub struct BiomeTraits: u16 {
         const FROZEN   = 1 << 0;
@@ -65,7 +65,16 @@ impl BiomeInfo {
     pub fn derive(name: &str, temperature: f32, downfall: f32) -> Self {
         let id = crate::world::blocks::strip_namespace(name);
         let family = family_of(id);
-        let traits = traits_of(id);
+        let mut traits = traits_of(id);
+        // DESERT is the dry-country map category, including savannas, steppe
+        // and dry datapack biomes whose names do not mention sand or deserts.
+        if family == BiomeFamily::Land
+            && !traits.intersects(BiomeTraits::FROZEN | BiomeTraits::CAVE)
+            && temperature >= config::TEMP_MEDIUM_MIN
+            && downfall <= config::DRYLAND_MAX_DOWNFALL
+        {
+            traits |= BiomeTraits::DESERT;
+        }
         let water_temperature = water_temperature_of(id, family, traits, temperature);
         let vegetation = vegetation_of(id, family, traits, downfall);
         BiomeInfo {
@@ -122,6 +131,8 @@ fn traits_of(id: &str) -> BiomeTraits {
             "dune",
             "bryce",
             "wasteland",
+            "canyon",
+            "savanna",
         ],
     ) {
         t |= BiomeTraits::DESERT;
@@ -536,6 +547,34 @@ mod tests {
         let f = BiomeInfo::derive("terralith:wintry_forest", -0.5, 0.4);
         assert!(f.traits.contains(BiomeTraits::FROZEN));
         assert_eq!(f.water_temperature, Temperature::Cold);
+    }
+
+    #[test]
+    fn dry_country_includes_canyons_savannas_and_low_rainfall_land() {
+        for (name, temperature, downfall) in [
+            ("terralith:amethyst_canyon", 0.95, 0.9),
+            ("minecraft:savanna", 1.2, 0.0),
+            ("terralith:brushland", 1.2, 0.2),
+            ("terralith:steppe", 0.4, -0.5),
+            ("custom:dry_country", 0.25, 0.2),
+        ] {
+            assert!(BiomeInfo::derive(name, temperature, downfall).traits
+                .contains(BiomeTraits::DESERT), "{name}");
+        }
+        for (name, temperature, downfall) in [
+            ("minecraft:plains", 0.8, 0.4),
+            ("minecraft:forest", 0.7, 0.8),
+            ("custom:wet_country", 0.8, 0.21),
+            ("terralith:cold_shrubland", 0.14, 0.0),
+            ("custom:snowy_country", 0.5, 0.0),
+            ("terralith:mantle_caves", 2.0, 0.0),
+            ("custom:swamp", 1.2, 0.0),
+            ("custom:river", 1.2, 0.0),
+            ("custom:ocean", 1.2, 0.0),
+        ] {
+            assert!(!BiomeInfo::derive(name, temperature, downfall).traits
+                .contains(BiomeTraits::DESERT), "{name}");
+        }
     }
 
     #[test]

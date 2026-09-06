@@ -33,7 +33,8 @@ use crate::water::grid::{ChunkFlags, WorldGrid, REGION_CHUNKS};
 use crate::water::kinds::{self, KindField};
 use crate::water::model::*;
 use crate::water::oceans::OceanSheets;
-use crate::world::biome::BiomeRegistry;
+use crate::water::proximity::DrylandProximity;
+use crate::world::biome::{BiomeRegistry, BiomeTraits};
 
 #[derive(Clone, Debug, Default)]
 pub struct RegionStats {
@@ -241,6 +242,7 @@ fn signature_pass(
 fn accumulate_run(
     grid: &WorldGrid,
     registry: &BiomeRegistry,
+    dryland: &DrylandProximity,
     accum: &mut RegionAccum,
     run: &LocalRun,
 ) {
@@ -276,6 +278,15 @@ fn accumulate_run(
             chunk.flags.contains(ChunkFlags::PLANTS),
             n,
         );
+        // Direct dry-biome evidence was already counted by add_cell. For a
+        // neutral river biome, nearby arid banks contribute once, without
+        // changing the river's kind, temperature or geometry.
+        if dryland.at_world(grid, x, run.z)
+            && !registry.info(cell.biome)
+                .is_some_and(|b| b.traits.contains(BiomeTraits::DESERT))
+        {
+            accum.desert_columns += n;
+        }
         x = end + 1;
     }
 }
@@ -395,6 +406,7 @@ pub fn build_regions(
     }
 
     // ---- pass 3: attributes and geometry ---------------------------------
+    let dryland = DrylandProximity::build(grid);
     let per_tile: Vec<TileAttributes> = sig_tiles
         .par_iter()
         .zip(sig_results.par_iter())
@@ -408,7 +420,7 @@ pub fn build_regions(
                 }
                 let accum = accums.entry(id).or_default();
                 accum.signature = t.sig_by_local[run.label as usize];
-                accumulate_run(grid, registry, accum, run);
+                accumulate_run(grid, registry, &dryland, accum, run);
                 runs.push((
                     id,
                     Run {
@@ -568,5 +580,48 @@ fn empty_tile() -> TileResult {
         edges: TileEdges {
             edges: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::water::grid::{ChunkWater, RegionWater};
+
+    #[test]
+    fn dry_banks_relabel_neutral_rivers_without_double_counting_or_changing_geometry() {
+        let registry = BiomeRegistry::vanilla_only();
+        for name in ["minecraft:river", "minecraft:desert"] {
+            let mut region = RegionWater::new(0, 0);
+            let mut chunk = ChunkWater::default();
+            for x in 0..8 { chunk.set(x, 0); }
+            chunk.water_cols = 8;
+            for cell in &mut chunk.cells[..2] {
+                cell.biome = registry.id_of(name);
+                cell.surface_y = 62;
+                cell.depth = 3;
+                cell.water_cols = 4;
+            }
+            let original_mask = chunk.mask;
+            region.insert(0, chunk);
+            // This neighbouring chunk holds only dry land, no water.
+            region.set_dryland(1, u16::MAX);
+            let grid = WorldGrid::build(vec![region]);
+            let dryland = DrylandProximity::build(&grid);
+            let sig = classifier::signature(WaterKind::River, Temperature::Medium, false, false);
+            let mut accum = RegionAccum { signature: sig, ..RegionAccum::default() };
+            accumulate_run(&grid, &registry, &dryland, &mut accum,
+                &LocalRun { z: 0, x0: 0, x1: 7, label: 0 });
+            assert_eq!(accum.columns, 8);
+            assert_eq!(accum.desert_columns, 8, "count direct and nearby evidence only once");
+            assert_eq!(accum.signature, sig);
+            assert_eq!(grid.regions[0].chunk(0).unwrap().mask, original_mask);
+            let finished = classifier::finalize(0, &accum, &registry);
+            assert_eq!(finished.kind, WaterKind::River);
+            assert_eq!(finished.temperature, Temperature::Medium);
+            assert!(finished.modifiers.contains(Modifiers::DESERT));
+            assert_eq!(finished.geometry.column_count, 8);
+            assert_eq!((finished.geometry.min_x, finished.geometry.max_x), (0, 7));
+        }
     }
 }
