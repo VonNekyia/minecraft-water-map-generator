@@ -20,6 +20,8 @@ pub struct PaletteEntry {
     pub len: u16,
     /// `Properties.waterlogged == "true"`, i.e. the block state contains water.
     pub waterlogged: bool,
+    /// Fluid level: only `Some(0)` is a stationary water source.
+    pub water_level: Option<u8>,
 }
 
 impl PaletteEntry {
@@ -183,10 +185,7 @@ pub fn packed_index(buf: &[u8], packed: PackedRef, bits: u32, i: usize) -> usize
 
 /// Parses a decompressed chunk. Returns `None` for chunks that are not fully
 /// generated - those have no usable heightmaps.
-pub fn parse_chunk(
-    buf: &[u8],
-    scratch: &mut ChunkScratch,
-) -> Result<Option<ParsedChunk>> {
+pub fn parse_chunk(buf: &[u8], scratch: &mut ChunkScratch) -> Result<Option<ParsedChunk>> {
     scratch.clear();
 
     let mut r = NbtReader::new(buf);
@@ -314,6 +313,7 @@ fn read_block_states(
                         off: 0,
                         len: 0,
                         waterlogged: false,
+                        water_level: None,
                     };
                     while let Some((t2, n2)) = r.next_entry()? {
                         match (t2, n2) {
@@ -324,7 +324,7 @@ fn read_block_states(
                                 entry.len = s.len() as u16;
                             }
                             (TAG_COMPOUND, "Properties") => {
-                                entry.waterlogged = read_waterlogged(r)?;
+                                read_water_properties(r, &mut entry)?;
                             }
                             _ => r.skip_payload(t2)?,
                         }
@@ -347,16 +347,17 @@ fn read_block_states(
     Ok(((pal_start, pal_len), data))
 }
 
-fn read_waterlogged(r: &mut NbtReader<'_>) -> Result<bool> {
-    let mut wl = false;
+fn read_water_properties(r: &mut NbtReader<'_>, entry: &mut PaletteEntry) -> Result<()> {
     while let Some((tag, name)) = r.next_entry()? {
         if tag == TAG_STRING && name == "waterlogged" {
-            wl = r.string()? == "true";
+            entry.waterlogged = r.string()? == "true";
+        } else if tag == TAG_STRING && name == "level" {
+            entry.water_level = r.string()?.parse().ok();
         } else {
             r.skip_payload(tag)?;
         }
     }
-    Ok(wl)
+    Ok(())
 }
 
 fn read_biomes(
@@ -384,6 +385,7 @@ fn read_biomes(
                         off,
                         len: s.len() as u16,
                         waterlogged: false,
+                        water_level: None,
                     });
                     pal_len += 1;
                 }
@@ -433,7 +435,7 @@ pub fn classify_palette(
     for i in 0..len as usize {
         let entry = palette[start as usize + i];
         let name = entry.name(buf);
-        let class = blocks::classify(name, entry.waterlogged);
+        let class = blocks::classify(name, entry.waterlogged, entry.water_level);
         match class {
             BlockClass::Water => facts.has_water = true,
             BlockClass::Ice => facts.has_ice = true,
@@ -516,6 +518,56 @@ pub fn biome_name_at<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nbt_water_levels_reach_palette_classification() {
+        fn string(buf: &mut Vec<u8>, s: &str) {
+            buf.extend_from_slice(&(s.len() as u16).to_be_bytes());
+            buf.extend_from_slice(s.as_bytes());
+        }
+        for level in (0..=15)
+            .map(|n| n.to_string())
+            .chain(["bad".into(), "".into()])
+        {
+            let mut buf = vec![TAG_LIST];
+            string(&mut buf, "palette");
+            buf.push(TAG_COMPOUND);
+            buf.extend_from_slice(&1i32.to_be_bytes());
+            // Properties deliberately precede Name, as NBT field order is arbitrary.
+            buf.push(TAG_COMPOUND);
+            string(&mut buf, "Properties");
+            buf.push(TAG_STRING);
+            string(&mut buf, "level");
+            string(&mut buf, &level);
+            buf.push(TAG_STRING);
+            string(&mut buf, "waterlogged");
+            string(&mut buf, "false");
+            buf.push(TAG_END);
+            buf.push(TAG_STRING);
+            string(&mut buf, "Name");
+            string(&mut buf, "minecraft:water");
+            buf.extend_from_slice(&[TAG_END, TAG_END]);
+            let mut scratch = ChunkScratch::new();
+            let (block_pal, block_data) =
+                read_block_states(&mut NbtReader::new(&buf), &mut scratch).unwrap();
+            let meta = SectionMeta {
+                y: 0,
+                block_pal,
+                block_data,
+                biome_pal: (0, 0),
+                biome_data: PackedRef::default(),
+            };
+            let mut classes = Vec::new();
+            let facts = classify_palette(&buf, &scratch.palette, &meta, &mut classes);
+            assert_eq!(facts.has_water, level == "0", "level {level}");
+            assert_eq!(
+                SectionReader::new(&buf, &classes, &meta)
+                    .class_at(0, 0, 0)
+                    .is_water(),
+                level == "0"
+            );
+        }
+    }
 
     #[test]
     fn ceil_log2_matches_minecraft_palette_sizing() {

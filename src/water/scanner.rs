@@ -207,8 +207,11 @@ impl SectionCache {
             // silently walking into undecoded territory.
             return BlockClass::Solid;
         }
-        SectionReader::new(buf, &self.classes[slot], &sections[slot])
-            .class_at(x, (y & 15) as usize, z)
+        SectionReader::new(buf, &self.classes[slot], &sections[slot]).class_at(
+            x,
+            (y & 15) as usize,
+            z,
+        )
     }
 }
 
@@ -678,5 +681,126 @@ fn biome_at(
     match chunk::biome_name_at(buf, &scratch.palette, meta, x, (y & 15) as usize, z) {
         Some(name) if !name.is_empty() => registry.id_of(name),
         _ => UNKNOWN_BIOME,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::chunk::{Heightmaps, PackedRef};
+
+    #[test]
+    fn surface_only_scan_excludes_roofed_and_flowing_columns_in_a_mixed_cell() {
+        let mut buf = Vec::new();
+        let mut scratch = ChunkScratch::new();
+        for (name, water_level) in [
+            ("minecraft:air", None),
+            ("minecraft:stone", None),
+            ("minecraft:water", Some(0)),
+            ("minecraft:water", Some(1)),
+        ] {
+            scratch.palette.push(PaletteEntry {
+                off: buf.len() as u32,
+                len: name.len() as u16,
+                waterlogged: false,
+                water_level,
+            });
+            buf.extend_from_slice(name.as_bytes());
+        }
+        let block_off = buf.len() as u32;
+        for y in 0..16 {
+            for z in 0..16 {
+                let mut word = 0u64;
+                for x in 0..16 {
+                    let class = if y < 4 || (y == 12 && x == 0 && z == 0) {
+                        1
+                    } else if y == 4 {
+                        if x == 1 && z == 0 {
+                            3
+                        } else {
+                            2
+                        }
+                    } else {
+                        0
+                    };
+                    word |= class << (x * 4);
+                }
+                buf.extend_from_slice(&word.to_be_bytes());
+            }
+        }
+        scratch.sections.push(SectionMeta {
+            y: 0,
+            block_pal: (0, 4),
+            block_data: PackedRef {
+                off: block_off,
+                longs: 256,
+            },
+            biome_pal: (0, 0),
+            biome_data: PackedRef::default(),
+        });
+        let mut heightmap = |roof: bool| {
+            let off = buf.len() as u32;
+            for group in 0..37 {
+                let mut word = 0u64;
+                for k in 0..7 {
+                    let i = group * 7 + k;
+                    let height = if i >= 256 {
+                        0
+                    } else if roof && i == 0 {
+                        13
+                    } else if roof {
+                        5
+                    } else {
+                        4
+                    };
+                    word |= height << (k * 9);
+                }
+                buf.extend_from_slice(&word.to_be_bytes());
+            }
+            PackedRef { off, longs: 37 }
+        };
+        let motion_blocking = heightmap(true);
+        let ocean_floor = heightmap(false);
+        let parsed = ParsedChunk {
+            x: 0,
+            z: 0,
+            min_section_y: 0,
+            data_version: 0,
+            full: true,
+            heightmaps: Heightmaps {
+                motion_blocking,
+                ocean_floor,
+                world_surface: PackedRef::default(),
+            },
+        };
+        let registry = BiomeRegistry::build(Path::new("__test_world_not_present__"));
+        for caves in [false, true] {
+            let mut stats = ScanStats::default();
+            let cw = scan_chunk(
+                &buf,
+                &parsed,
+                &registry,
+                &scratch,
+                &mut SectionCache::default(),
+                &mut [0; 256],
+                &mut [0; 256],
+                &mut stats,
+                caves,
+            )
+            .unwrap();
+            assert_eq!(
+                cw.get(0, 0),
+                caves,
+                "roofed source only enters with cave scanning"
+            );
+            assert!(
+                !cw.get(1, 0),
+                "flowing column must never enter the water mask"
+            );
+            assert!(cw.get(2, 0), "open source below sea level must remain");
+            assert_eq!(cw.water_cols, if caves { 255 } else { 254 });
+            assert_eq!(stats.cave_columns, u64::from(caves));
+            assert_eq!(cw.cells[0].cave_cols, u8::from(caves));
+        }
     }
 }

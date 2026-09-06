@@ -9,8 +9,10 @@ plugins and other tools. Supports vanilla and datapack biomes, including Terrali
 
 These examples show the same Minecraft world at eight blocks per pixel. Click an
 image for the full-size PNG. The combined map gives ocean zones priority at the coast.
-These samples use `--min-river-merge 5000 --min-sea-merge 10000`, the balanced
-settings measured below.
+These samples use source water only with `--no-caves --min-river-merge 5000
+--min-sea-merge 10000`. Underground pools are excluded before classification. The current source-only
+export has 2,673 regions: 173 seas, 942 rivers, 1,209 lakes and 349 swamps, with
+zero cave regions. All 150 tests and 66 binary lookup round trips pass.
 
 ### Combined ocean, river and lake map
 
@@ -38,7 +40,7 @@ Install the Rust toolchain, then build the command-line tool:
 git clone https://github.com/VonNekyia/minecraft-water-map-generator.git
 cd minecraft-water-map-generator
 cargo build --release
-cargo run --release -- --world "/path/to/minecraft/world" --output ./generated --export-map
+cargo run --release -- --world "/path/to/minecraft/world" --output ./generated --export-map --no-caves
 ```
 
 Replace the world path with a Minecraft Java world folder containing `region/`
@@ -73,10 +75,30 @@ It does not know about fish, loot, rarity, ships, trading or any other gameplay
 concept, and it must stay that way. Consumers read the same neutral data and make
 their own decisions.
 
+## Which water counts
+
+Ordinary `minecraft:water` counts only with `Properties.level=0` (source water).
+Levels 1-15 (flowing and falling water), the `flowing_water` block name, and
+water states with missing or invalid levels are excluded. Waterlogged blocks,
+kelp, seagrass and bubble columns continue to count as water-containing blocks.
+This can break a connection made solely by a waterfall or flowing stream.
+
+Use `--no-caves`, as in the examples, to exclude roofed underground pools from
+both counts and exported geometry. Exclusion happens during scanning, before
+4x4 cell aggregation, so a cave column cannot be counted as surface water merely
+because most of its neighboring columns are exposed. Without this flag, cave
+scanning remains available and labels underground pools with the `cave` modifier;
+cells containing both surface and cave columns use a majority classification.
+
+This is a surface-exposure check, not a cutoff that removes every block below sea
+level. The water under an exposed ocean surface is still used to measure ocean
+depth, and exposed lakes below sea level remain valid water bodies. Ice, snow and
+lily pads are recognized as surface covers.
+
 ## Usage
 
 ```bash
-water-analyzer --world "./server/world" --output "./generated"
+water-analyzer --world "./server/world" --output "./generated" --no-caves
 ```
 
 Options:
@@ -524,11 +546,11 @@ only that visual setting does **not** reduce the exported region count.
 A balanced starting point for this world is:
 
 ```bash
-cargo run --release -- --world "/path/to/world" --output ./generated --export-map --min-water-body 200 --min-river-merge 5000 --min-sea-merge 10000 --ocean-map-min-area 10000
+cargo run --release -- --world "/path/to/world" --output ./generated --export-map --no-caves --min-water-body 200 --min-river-merge 5000 --min-sea-merge 10000 --ocean-map-min-area 10000
 ```
 
-For surface-water gameplay only, add `--no-caves`; for underground pools as well,
-start with `--min-cave-body 4000` and inspect which smaller cave pools disappear.
+The command above excludes underground water with `--no-caves`. To include
+underground pools, remove that flag and start with `--min-cave-body 4000` and inspect which smaller cave pools disappear.
 Cave pools dominate the total region count in the example world, so filtering
 them has a much larger effect on the total than changing surface-water labels.
 
@@ -543,11 +565,12 @@ them has a much larger effect on the total than changing surface-water labels.
 ### Why small spots can remain visible
 
 `--min-water-body 200` is a retention floor in **square blocks**, not a minimum
-width in blocks or pixels. In the balanced sample export, no region has fewer
+width in blocks or pixels. In the earlier balanced export (before source-only
+filtering), no region had fewer
 than 200 water columns, and a run-level connectivity audit found all 2,785
 surface regions to be connected.
 
-The merge thresholds do not delete isolated water. The balanced export still has
+The merge thresholds do not delete isolated water. That earlier balanced export retained
 273 river regions below 5,000 columns because no adjoining river group remains.
 Lake and swamp regions are not subject to river consolidation; their small bodies
 remain visible above the retention floor. The ocean display sieve separately
@@ -566,7 +589,8 @@ the region-ID map to distinguish data-region boundaries from the coloured overvi
 
 ### Measured results on the sample world
 
-Same 2,509 region files, retention minimum 200, caves included. These counts are
+Historical comparison before source-only filtering: same 2,509 region files,
+retention minimum 200, caves included. These counts are
 actual data regions, not map colour patches. Zero disables only the new final
 consolidation pass; the earlier noise absorption remains active.
 

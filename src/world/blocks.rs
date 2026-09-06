@@ -14,7 +14,7 @@ pub enum BlockClass {
     /// Anything that is neither water nor a thin cover above water.
     Solid = 0,
     Air = 1,
-    /// Water, waterlogged blocks and blocks that always contain water
+    /// Source water, waterlogged blocks and blocks that always contain water
     /// (kelp, seagrass, bubble columns, ...).
     Water = 2,
     /// Ice variants. Above water these produce the `ICE` modifier.
@@ -54,7 +54,13 @@ const WATERY_BLOCKS: [&str; 6] = [
 ];
 
 /// Aquatic vegetation used for the vegetation classification.
-const AQUATIC_PLANTS: [&str; 5] = ["kelp", "kelp_plant", "seagrass", "tall_seagrass", "sea_pickle"];
+const AQUATIC_PLANTS: [&str; 5] = [
+    "kelp",
+    "kelp_plant",
+    "seagrass",
+    "tall_seagrass",
+    "sea_pickle",
+];
 
 /// Thin covers that can sit directly on a water surface.
 const COVER_BLOCKS: [&str; 4] = ["snow", "lily_pad", "snow_block", "powder_snow"];
@@ -69,12 +75,20 @@ pub fn strip_namespace(name: &str) -> &str {
     }
 }
 
-/// Classifies a palette entry by its block id and its `waterlogged` property.
+/// Classifies a palette entry using its block id, waterlogging and fluid level.
+/// Flowing/falling water and water with an unknown level are excluded.
 #[inline]
-pub fn classify(name: &str, waterlogged: bool) -> BlockClass {
+pub fn classify(name: &str, waterlogged: bool, water_level: Option<u8>) -> BlockClass {
     let id = strip_namespace(name);
-    if id == "water" || id == "flowing_water" {
-        return BlockClass::Water;
+    if id == "flowing_water" {
+        return BlockClass::Solid;
+    }
+    if id == "water" {
+        return if water_level == Some(0) {
+            BlockClass::Water
+        } else {
+            BlockClass::Solid
+        };
     }
     if id == "air" || id == "cave_air" || id == "void_air" {
         return BlockClass::Air;
@@ -118,21 +132,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_source_fluid_counts_even_with_waterlogged_property() {
+        for level in 1..=15 {
+            assert!(!classify("minecraft:water", false, Some(level)).is_water());
+            assert!(!classify("minecraft:water", true, Some(level)).is_water());
+        }
+        assert!(!classify("minecraft:water", false, None).is_water());
+        assert!(!classify("minecraft:flowing_water", false, Some(0)).is_water());
+        assert!(classify("minecraft:water", false, Some(0)).is_water());
+        assert!(classify("minecraft:oak_stairs", true, None).is_water());
+        assert!(classify("minecraft:kelp", false, None).is_water());
+    }
+
+    #[test]
     fn water_family_is_recognised() {
-        assert_eq!(classify("minecraft:water", false), BlockClass::Water);
-        assert_eq!(classify("minecraft:kelp_plant", false), BlockClass::Water);
-        assert_eq!(classify("minecraft:tall_seagrass", false), BlockClass::Water);
-        assert_eq!(classify("minecraft:oak_stairs", true), BlockClass::Water);
-        assert_eq!(classify("minecraft:oak_stairs", false), BlockClass::Solid);
+        assert_eq!(
+            classify("minecraft:water", false, Some(0)),
+            BlockClass::Water
+        );
+        assert_eq!(
+            classify("minecraft:kelp_plant", false, Some(0)),
+            BlockClass::Water
+        );
+        assert_eq!(
+            classify("minecraft:tall_seagrass", false, Some(0)),
+            BlockClass::Water
+        );
+        assert_eq!(
+            classify("minecraft:oak_stairs", true, Some(0)),
+            BlockClass::Water
+        );
+        assert_eq!(
+            classify("minecraft:oak_stairs", false, Some(0)),
+            BlockClass::Solid
+        );
     }
 
     #[test]
     fn ice_and_cover_are_distinct_from_solid() {
-        assert_eq!(classify("minecraft:ice", false), BlockClass::Ice);
-        assert_eq!(classify("minecraft:blue_ice", false), BlockClass::Ice);
-        assert_eq!(classify("minecraft:snow", false), BlockClass::Cover);
-        assert_eq!(classify("minecraft:lily_pad", false), BlockClass::Cover);
-        assert_eq!(classify("minecraft:stone", false), BlockClass::Solid);
+        assert_eq!(classify("minecraft:ice", false, Some(0)), BlockClass::Ice);
+        assert_eq!(
+            classify("minecraft:blue_ice", false, Some(0)),
+            BlockClass::Ice
+        );
+        assert_eq!(
+            classify("minecraft:snow", false, Some(0)),
+            BlockClass::Cover
+        );
+        assert_eq!(
+            classify("minecraft:lily_pad", false, Some(0)),
+            BlockClass::Cover
+        );
+        assert_eq!(
+            classify("minecraft:stone", false, Some(0)),
+            BlockClass::Solid
+        );
         assert!(BlockClass::Ice.is_cover());
         assert!(!BlockClass::Solid.is_cover());
     }
@@ -150,6 +204,6 @@ mod tests {
     fn namespace_is_optional() {
         assert_eq!(strip_namespace("terralith:foo"), "foo");
         assert_eq!(strip_namespace("water"), "water");
-        assert_eq!(classify("water", false), BlockClass::Water);
+        assert_eq!(classify("water", false, Some(0)), BlockClass::Water);
     }
 }
