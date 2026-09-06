@@ -855,19 +855,27 @@ mod tests {
         let (mut buf, mut scratch, parsed) = swamp_fixture(true);
         let registry = BiomeRegistry::vanilla_only();
         assert_eq!(scan_dryland(&buf, &parsed, &scratch, &registry, &mut [0; 256]), 0);
-        // Reuse the packed heightmap, but make every block solid and set the
-        // surface biome to savanna. No wet chunk will be inserted for this bank.
+        // Reuse the packed heightmap, but make every block solid. Only desert
+        // banks count; savanna and other dry terrain must stay unmarked.
         scratch.sections[0].block_pal = (1, 1);
-        let name = "minecraft:savanna";
-        scratch.palette[6].off = buf.len() as u32;
-        scratch.palette[6].len = name.len() as u16;
-        buf.extend_from_slice(name.as_bytes());
-        assert_eq!(scan_dryland(&buf, &parsed, &scratch, &registry, &mut [0; 256]), u16::MAX);
-        assert!(scan_chunk(
-            &buf, &parsed, &registry, &scratch, &mut SectionCache::default(),
-            &mut [0; 256], &mut [0; 256], &mut ScanStats::default(),
-            ScanOptions { caves: true, min_surface_y: Some(53) },
-        ).is_none());
+        for (name, expected) in [
+            ("minecraft:desert", u16::MAX),
+            ("minecraft:savanna", 0),
+            ("minecraft:savanna_plateau", 0),
+            ("minecraft:badlands", 0),
+            ("minecraft:plains", 0),
+        ] {
+            scratch.palette[6].off = buf.len() as u32;
+            scratch.palette[6].len = name.len() as u16;
+            buf.extend_from_slice(name.as_bytes());
+            assert_eq!(scan_dryland(&buf, &parsed, &scratch, &registry, &mut [0; 256]),
+                expected, "{name}");
+            assert!(scan_chunk(
+                &buf, &parsed, &registry, &scratch, &mut SectionCache::default(),
+                &mut [0; 256], &mut [0; 256], &mut ScanStats::default(),
+                ScanOptions { caves: true, min_surface_y: Some(53) },
+            ).is_none(), "land metadata must not create water geometry for {name}");
+        }
     }
 
     #[test]

@@ -34,7 +34,7 @@ pub enum BiomeFamily {
 }
 
 bitflags::bitflags! {
-    /// Environmental traits derived from biome names and climate metadata.
+    /// Environmental traits derived from biome names.
     #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
     pub struct BiomeTraits: u16 {
         const FROZEN   = 1 << 0;
@@ -65,16 +65,7 @@ impl BiomeInfo {
     pub fn derive(name: &str, temperature: f32, downfall: f32) -> Self {
         let id = crate::world::blocks::strip_namespace(name);
         let family = family_of(id);
-        let mut traits = traits_of(id);
-        // DESERT is the dry-country map category, including savannas, steppe
-        // and dry datapack biomes whose names do not mention sand or deserts.
-        if family == BiomeFamily::Land
-            && !traits.intersects(BiomeTraits::FROZEN | BiomeTraits::CAVE)
-            && temperature >= config::TEMP_MEDIUM_MIN
-            && downfall <= config::DRYLAND_MAX_DOWNFALL
-        {
-            traits |= BiomeTraits::DESERT;
-        }
+        let traits = traits_of(id);
         let water_temperature = water_temperature_of(id, family, traits, temperature);
         let vegetation = vegetation_of(id, family, traits, downfall);
         BiomeInfo {
@@ -118,23 +109,9 @@ fn traits_of(id: &str) -> BiomeTraits {
     {
         t |= BiomeTraits::FROZEN;
     }
-    if contains_any(
-        id,
-        &[
-            "desert",
-            "badlands",
-            "mesa",
-            "arid",
-            "oasis",
-            "sandstone",
-            "_sands",
-            "dune",
-            "bryce",
-            "wasteland",
-            "canyon",
-            "savanna",
-        ],
-    ) {
+    // The map's sand category is explicitly desert and canyon, not every
+    // low-rainfall biome or terrain type that might look dry.
+    if contains_any(id, &["desert", "canyon"]) {
         t |= BiomeTraits::DESERT;
     }
     if id.contains("mangrove") {
@@ -550,18 +527,27 @@ mod tests {
     }
 
     #[test]
-    fn dry_country_includes_canyons_savannas_and_low_rainfall_land() {
+    fn desert_category_is_limited_to_desert_and_canyon_names() {
         for (name, temperature, downfall) in [
+            ("minecraft:desert", 2.0, 0.0),
+            ("terralith:desert_oasis", 2.0, 0.0),
+            ("terralith:desert_canyon", 2.0, 0.0),
+            ("terralith:bryce_canyon", 2.0, 0.0),
             ("terralith:amethyst_canyon", 0.95, 0.9),
-            ("minecraft:savanna", 1.2, 0.0),
-            ("terralith:brushland", 1.2, 0.2),
-            ("terralith:steppe", 0.4, -0.5),
-            ("custom:dry_country", 0.25, 0.2),
         ] {
             assert!(BiomeInfo::derive(name, temperature, downfall).traits
                 .contains(BiomeTraits::DESERT), "{name}");
         }
         for (name, temperature, downfall) in [
+            ("minecraft:savanna", 1.2, 0.0),
+            ("minecraft:savanna_plateau", 1.2, 0.0),
+            ("minecraft:badlands", 2.0, 0.0),
+            ("terralith:brushland", 1.2, 0.2),
+            ("terralith:steppe", 0.4, -0.5),
+            ("terralith:arid_highlands", 1.6, 0.1),
+            ("custom:mesa", 2.0, 0.0),
+            ("custom:wasteland", 2.0, 0.0),
+            ("custom:dry_country", 0.25, 0.2),
             ("minecraft:plains", 0.8, 0.4),
             ("minecraft:forest", 0.7, 0.8),
             ("custom:wet_country", 0.8, 0.21),

@@ -16,7 +16,7 @@ mountains. Flowing/falling water and lower water surfaces are excluded before
 classification; merging and the 2,000-column minimum then remove small regions.
 The current export contains 2,336 regions: 148 seas, 955 rivers, 1,081 lakes and
 152 swamps. Raw mud expands the retained swamp area from 1.84 to 7.89 million
-square blocks; the dry-country modifier now applies to 498 regions.
+square blocks; the desert/canyon modifier applies to 91 regions.
 The height rule also admits shallow covered ponds; the area floor
 removes small isolated ones. Desert rivers and lakes use lighter sand colours.
 
@@ -519,8 +519,8 @@ not, and the data says so.
   dissolve into the cold ocean next to it.
 * `CORALS` - living coral blocks / fans found near the ocean floor. Dead coral does
   not count.
-* `DESERT` - inland water in dry country, including canyons, badlands, savannas
-  and low-rainfall land biomes. It retains its water kind; `desert` is a modifier.
+* `DESERT` - inland water in desert or canyon biomes. It retains its water kind;
+  `desert` is a modifier.
 * `MANGROVE` - mangrove water. Also a modifier; the kind stays `swamp`.
 * `CAVE` - the water cannot see the sky. Cave regions are always `lake` - there is
   no sea, river or swamp without a sky - and they never merge with water above
@@ -609,7 +609,7 @@ use 1000 when those matter more than a cleaner overview. Covered mountain passag
 still qualify under the same height rule, rather than being excluded by a roof.
 Both comparison exports passed their binary lookup verification (65 and 66 checks).
 The CLI defaults are unchanged. The current samples use the same explicit preset,
-with the dry-country and raw-mud detection described above.
+with the desert/canyon and raw-mud detection described above.
 
 ### Why small spots can remain visible
 
@@ -697,19 +697,18 @@ desert, mangrove, jungle) are derived from the resource location, so an unknown
 modded biome still lands somewhere sensible. `--debug` reports any biome name the
 registry did not know.
 
-The desert map category covers dry country generally: canyon, savanna, badlands,
-mesa and the existing desert/arid names qualify. Other land biomes qualify when
-`downfall <= 0.2` and `temperature >= 0.25`, excluding frozen and cave biomes.
-These limits use biome metadata, not the world's current weather.
+The desert map category is limited to biome names containing `desert` or
+`canyon`. Savannas, badlands, shrubland, steppe and other dry terrain do not qualify
+on their own. Rainfall and temperature do not add biomes to this category.
 
 River biomes can keep a neutral name even inside a canyon. The scanner therefore
-records dry surface-biome cells in all chunks, including chunks with no water.
-Inland regions also receive dry-country evidence from banks within four biome
+records desert/canyon surface-biome cells in all chunks, including chunks with no
+water. Inland regions also receive desert/canyon evidence from banks within four biome
 cells (16 blocks, including diagonals), across chunk and region-file boundaries.
-At least 40% of a region's columns must have direct or nearby dry-country evidence
+At least 40% of a region's columns must have direct or nearby desert/canyon evidence
 to receive `DESERT`. This changes the modifier without splitting regions or
-expanding water outlines. Tune `DRYLAND_MAX_DOWNFALL`, `DRYLAND_CELL_RADIUS` and
-`DESERT_MIN_SHARE` in `src/config.rs` to adjust those rules.
+expanding water outlines. Tune `DRYLAND_CELL_RADIUS` and `DESERT_MIN_SHARE` in
+`src/config.rs` to adjust the bank distance and required share.
 
 ## Tests
 
