@@ -205,9 +205,10 @@ validation aids:
 | Cold ocean | `#48659c` | `#2b3d5e` |
 | River / lake | River `#3ae1cd` | Lake `#99cacd` |
 | Desert river / lake | River `#ead7a0` | Lake `#cbb984` |
+| Swamp | Light brown `#c4a484` | `#c4a484` |
 
-Desert colours use the region's `DESERT` modifier. Swamps retain their existing
-colour. The combined map keeps ocean priority at shared coastal pixels.
+Desert colours use the region's `DESERT` modifier. Swamps use light brown.
+The combined map keeps ocean priority at shared coastal pixels.
 
 ## How it works
 

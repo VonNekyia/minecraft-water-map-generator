@@ -33,6 +33,7 @@ const PANEL_BG: [u8; 3] = [8, 8, 12];
 const TEXT: [u8; 3] = [232, 232, 236];
 const TEXT_DIM: [u8; 3] = [150, 152, 160];
 const HEADER: [u8; 3] = [126, 198, 255];
+const SWAMP_COLOR: [u8; 3] = [0xc4, 0xa4, 0x84];
 
 pub struct MapOptions {
     /// Blocks per pixel.
@@ -144,7 +145,7 @@ fn kind_color(kind: WaterKind) -> [u8; 3] {
         WaterKind::Sea => [30, 82, 178],
         WaterKind::River => [58, 168, 205],
         WaterKind::Lake => [40, 165, 132],
-        WaterKind::Swamp => [86, 108, 60],
+        WaterKind::Swamp => SWAMP_COLOR,
     }
 }
 
@@ -828,7 +829,7 @@ fn inland_color(kind: WaterKind) -> [u8; 3] {
         WaterKind::Sea => [36, 112, 120],
         WaterKind::River => [0x3a, 0xe1, 0xcd],
         WaterKind::Lake => [0x99, 0xca, 0xcd],
-        WaterKind::Swamp => [190, 175, 80],
+        WaterKind::Swamp => SWAMP_COLOR,
     }
 }
 
