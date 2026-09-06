@@ -707,7 +707,7 @@ fn depth_rows(sea_level: i16, blocks_per_pixel: u32) -> Vec<Row> {
     rows.push(heading("BACKGROUND"));
     rows.push(entry("LAND OR NO WATER", Swatch::Color(BG_LAND)));
     rows.push(entry("NOT GENERATED", Swatch::Color(BG_VOID)));
-    rows.push(note("CAVE WATER IS LEFT OUT"));
+    rows.push(note("USES FILTERED WATER DATA"));
     rows.push(heading("THIS MAP"));
     rows.push(note(&format!("SEA LEVEL {sea_level}")));
     rows.push(note(&format!("1 PIXEL = {blocks_per_pixel} BLOCKS")));
@@ -898,7 +898,7 @@ fn inland_rows(regions: &[WaterRegion], blocks_per_pixel: u32) -> Vec<Row> {
         heading("BACKGROUND"),
         entry("LAND", Swatch::Color(BG_LAND)),
         entry("NOT GENERATED", Swatch::Color(BG_VOID)),
-        note("CAVE WATER IS LEFT OUT"),
+        note("USES FILTERED WATER DATA"),
         heading("THIS MAP"),
         note(&format!("RIVERS {}", count(WaterKind::River))),
         note(&format!("LAKES {}", count(WaterKind::Lake))),
@@ -919,7 +919,7 @@ fn combined_rows(regions: &[WaterRegion], sea_level: i16, blocks_per_pixel: u32,
         entry("SWAMP", Swatch::Color(inland_color(WaterKind::Swamp))),
         entry("DESERT RIVER", Swatch::Color(inland_region_color(WaterKind::River, Modifiers::DESERT))),
         entry("DESERT LAKE", Swatch::Color(inland_region_color(WaterKind::Lake, Modifiers::DESERT))),
-        note("CAVE WATER IS LEFT OUT"),
+        note("USES FILTERED WATER DATA"),
         note("OCEAN HAS PRIORITY AT COAST"),
     ]);
     for row in &mut rows {

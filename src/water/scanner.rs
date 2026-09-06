@@ -250,12 +250,26 @@ pub struct RegionScan {
     pub stats: ScanStats,
 }
 
+/// Scan policy. A height cutoff replaces sky visibility as the exclusion rule:
+/// accepted roofed water participates in normal sea/river/lake classification.
+#[derive(Clone, Copy, Default)]
+pub struct ScanOptions {
+    pub caves: bool,
+    pub min_surface_y: Option<i32>,
+}
+
+impl ScanOptions {
+    fn accepts(self, surface_y: i32) -> bool {
+        self.min_surface_y.is_none_or(|minimum| surface_y >= minimum)
+    }
+}
+
 /// Scans one `.mca` file.
 pub fn scan_region_file(
     path: &Path,
     registry: &BiomeRegistry,
     ctx: &mut ScanContext,
-    caves: bool,
+    options: ScanOptions,
 ) -> std::io::Result<Option<RegionScan>> {
     let Some(region) = RegionFile::open(path)? else {
         return Ok(None);
@@ -293,7 +307,7 @@ pub fn scan_region_file(
             &mut ctx.mb,
             &mut ctx.of,
             &mut stats,
-            caves,
+            options,
         );
         if let Some(cw) = scanned {
             stats.water_chunks += 1;
@@ -323,7 +337,7 @@ fn scan_chunk(
     mb: &mut [u16; 256],
     of: &mut [u16; 256],
     stats: &mut ScanStats,
-    caves: bool,
+    options: ScanOptions,
 ) -> Option<ChunkWater> {
     let sections = scratch.sections.as_slice();
     if sections.is_empty() {
@@ -378,7 +392,7 @@ fn scan_chunk(
     };
 
     cache.reset(sections);
-    let (classify_lo, classify_hi) = if caves {
+    let (classify_lo, classify_hi) = if options.caves {
         // Cave water can sit anywhere below the surface, so every palette matters.
         (i32::MIN / 2, i32::MAX / 2)
     } else {
@@ -431,6 +445,9 @@ fn scan_chunk(
                 continue;
             };
 
+            if !options.accepts(col.surface_y) {
+                continue;
+            }
             cw.set(x, z);
             cw.water_cols += 1;
             cell_cols[cell] += 1;
@@ -443,7 +460,7 @@ fn scan_chunk(
         }
     }
 
-    if caves {
+    if options.caves {
         scan_caves(
             buf,
             sections,
@@ -456,6 +473,7 @@ fn scan_chunk(
             &mut cell_surface_sum,
             &mut cell_depth_sum,
             stats,
+            options,
         );
     }
 
@@ -523,6 +541,7 @@ fn scan_caves(
     cell_surface_sum: &mut [i64; 16],
     cell_depth_sum: &mut [i64; 16],
     stats: &mut ScanStats,
+    options: ScanOptions,
 ) {
     // Columns that already have surface water, or no blocks at all, are done.
     let mut pending = 0u32;
@@ -554,6 +573,9 @@ fn scan_caves(
                 break;
             }
             let world_y = section_y + yy as i32;
+            if !options.accepts(world_y) {
+                continue;
+            }
             for z in 0..16usize {
                 for x in 0..16usize {
                     let i = z * 16 + x;
@@ -572,7 +594,11 @@ fn scan_caves(
                     cw.set(x, z);
                     cw.water_cols += 1;
                     cell_cols[cell] += 1;
-                    cell_cave[cell] += 1;
+                    // In height mode a roof is not a cave-classification boundary:
+                    // qualifying tunnel water must stay in normal river/sea groups.
+                    if options.min_surface_y.is_none() {
+                        cell_cave[cell] += 1;
+                    }
                     cell_surface_sum[cell] += world_y as i64;
                     cell_depth_sum[cell] += (world_y - floor).max(0) as i64;
                     stats.cave_columns += 1;
@@ -690,7 +716,7 @@ mod tests {
     use crate::world::chunk::{Heightmaps, PackedRef};
 
     #[test]
-    fn surface_only_scan_excludes_roofed_and_flowing_columns_in_a_mixed_cell() {
+    fn height_rule_keeps_covered_sources_and_excludes_flowing_water() {
         let mut buf = Vec::new();
         let mut scratch = ChunkScratch::new();
         for (name, water_level) in [
@@ -774,7 +800,12 @@ mod tests {
             },
         };
         let registry = BiomeRegistry::build(Path::new("__test_world_not_present__"));
-        for caves in [false, true] {
+        for (options, expected_columns, roof_retained, cave_modifier) in [
+            (ScanOptions { caves: false, min_surface_y: None }, 254, false, false),
+            (ScanOptions { caves: true, min_surface_y: None }, 255, true, true),
+            (ScanOptions { caves: true, min_surface_y: Some(4) }, 255, true, false),
+            (ScanOptions { caves: true, min_surface_y: Some(5) }, 0, false, false),
+        ] {
             let mut stats = ScanStats::default();
             let cw = scan_chunk(
                 &buf,
@@ -785,12 +816,16 @@ mod tests {
                 &mut [0; 256],
                 &mut [0; 256],
                 &mut stats,
-                caves,
-            )
-            .unwrap();
+                options,
+            );
+            if expected_columns == 0 {
+                assert!(cw.is_none(), "water surfaces below the cutoff must be excluded");
+                continue;
+            }
+            let cw = cw.unwrap();
             assert_eq!(
                 cw.get(0, 0),
-                caves,
+                roof_retained,
                 "roofed source only enters with cave scanning"
             );
             assert!(
@@ -798,9 +833,9 @@ mod tests {
                 "flowing column must never enter the water mask"
             );
             assert!(cw.get(2, 0), "open source below sea level must remain");
-            assert_eq!(cw.water_cols, if caves { 255 } else { 254 });
-            assert_eq!(stats.cave_columns, u64::from(caves));
-            assert_eq!(cw.cells[0].cave_cols, u8::from(caves));
+            assert_eq!(cw.water_cols, expected_columns);
+            assert_eq!(stats.cave_columns, u64::from(roof_retained));
+            assert_eq!(cw.cells[0].cave_cols, u8::from(cave_modifier));
         }
     }
 }

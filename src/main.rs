@@ -90,6 +90,11 @@ struct Cli {
     #[arg(long)]
     no_caves: bool,
 
+    /// Keep water surfaces at or above sea level minus N, including covered rivers.
+    /// This replaces cave classification with the height rule; flowing water stays excluded.
+    #[arg(long, conflicts_with = "no_caves")]
+    max_below_sea_level: Option<u16>,
+
     /// Smallest cave pool to report, in columns. Defaults to `--min-water-body`.
     /// Aquifers are far more numerous than lakes, so this usually wants to be
     /// higher than the surface threshold.
@@ -159,7 +164,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     println!("  river merge area {} columns", cli.min_river_merge);
     println!("  sea merge area   {} columns", cli.min_sea_merge);
     println!("  ocean map area   {} columns", cli.ocean_map_min_area);
-    if cli.no_caves {
+    if let Some(offset) = cli.max_below_sea_level {
+        println!("  water cutoff     sea level minus {offset}; covered water included");
+    } else if cli.no_caves {
         println!("  cave water       skipped");
     } else {
         println!(
@@ -174,10 +181,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let scan_started = Instant::now();
     let done = AtomicU64::new(0);
     let total = files.len() as u64;
-    let scans: Vec<scanner::RegionScan> = files
+    let scan_all = |options: scanner::ScanOptions| -> Vec<scanner::RegionScan> { files
         .par_iter()
         .map_init(ScanContext::new, |ctx, path| {
-            let result = scanner::scan_region_file(path, &registry, ctx, !cli.no_caves);
+            let result = scanner::scan_region_file(path, &registry, ctx, options);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n % 100 == 0 || n == total {
                 let pct = n as f64 * 100.0 / total as f64;
@@ -194,7 +201,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
         })
         .filter_map(|x| x)
-        .collect();
+        .collect()
+    };
+    let scans = scan_all(scanner::ScanOptions {
+        caves: !cli.no_caves && cli.max_below_sea_level.is_none(),
+        min_surface_y: None,
+    });
     println!();
 
     let mut stats = ScanStats::default();
@@ -206,7 +218,6 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         // whole generated world rather than just its wet parts.
         region_waters.push(s.water);
     }
-    let scan_seconds = scan_started.elapsed().as_secs_f64();
 
     // ---- sea level ---------------------------------------------------------
     let detected = water::sea_level::detect(&stats.ocean_surface_hist, &stats.surface_hist);
@@ -216,6 +227,22 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     } else {
         detected.source.as_str()
     };
+
+    if let Some(offset) = cli.max_below_sea_level {
+        let minimum = i32::from(sea_level) - i32::from(offset);
+        println!("  keeping water surfaces at Y >= {minimum}, including covered rivers");
+        // Detect level from exposed water first; apply the exact cutoff to each
+        // column on a second scan, before any 4x4 averaging or connectivity.
+        region_waters.clear();
+        stats = ScanStats::default();
+        done.store(0, Ordering::Relaxed);
+        for s in scan_all(scanner::ScanOptions { caves: true, min_surface_y: Some(minimum) }) {
+            stats = stats.merge(s.stats);
+            region_waters.push(s.water);
+        }
+        println!();
+    }
+    let scan_seconds = scan_started.elapsed().as_secs_f64();
 
     // ---- phase 2: regions --------------------------------------------------
     let min_cave_body = cli.min_cave_body.unwrap_or(cli.min_water_body);
@@ -524,6 +551,18 @@ mod tests {
     }
 
     #[test]
+    fn height_filter_cannot_accidentally_enable_sky_exclusion() {
+        let cli = Cli::try_parse_from([
+            "water-analyzer", "--world", "world", "--max-below-sea-level", "10",
+        ]).unwrap();
+        assert_eq!(cli.max_below_sea_level, Some(10));
+        assert!(!cli.no_caves);
+        assert!(Cli::try_parse_from([
+            "water-analyzer", "--world", "world", "--max-below-sea-level", "10", "--no-caves",
+        ]).is_err());
+    }
+
+    #[test]
     fn world_path_must_contain_a_region_directory() {
         let cli = Cli {
             world: PathBuf::from("definitely-not-a-world"),
@@ -540,6 +579,7 @@ mod tests {
             min_sea_merge: config::SEA_MERGE_MIN_COLUMNS,
             ocean_map_min_area: config::OCEAN_MAP_MIN_AREA,
             no_caves: false,
+            max_below_sea_level: None,
             min_cave_body: None,
             min_sea_body: config::SEA_MIN_COLUMNS,
         };

@@ -9,10 +9,14 @@ plugins and other tools. Supports vanilla and datapack biomes, including Terrali
 
 These examples show the same Minecraft world at eight blocks per pixel. Click an
 image for the full-size PNG. The combined map gives ocean zones priority at the coast.
-These samples use source water only with `--no-caves --min-river-merge 5000
---min-sea-merge 10000`. Underground pools are excluded before classification. The current source-only
-export has 2,673 regions: 173 seas, 942 rivers, 1,209 lakes and 349 swamps, with
-zero cave regions. All 150 tests and 66 binary lookup round trips pass.
+These samples use source water only with `--max-below-sea-level 10
+--min-river-merge 5000 --min-sea-merge 10000`. At sea level 63, water surfaces at
+Y=53 or above are retained, including rivers under mountains. Lower water surfaces
+and flowing/falling water are excluded before classification. This export contains
+11,230 regions (235 seas, 2,889 rivers, 7,440 lakes and 666 swamps). The scan retains
+19,607,677 covered water columns above the cutoff. All 151 tests and 65 binary
+lookup round trips pass. This height rule also keeps shallow covered ponds; it
+does not attempt to distinguish those from mountain passages by sky exposure.
 
 ### Combined ocean, river and lake map
 
@@ -40,7 +44,7 @@ Install the Rust toolchain, then build the command-line tool:
 git clone https://github.com/VonNekyia/minecraft-water-map-generator.git
 cd minecraft-water-map-generator
 cargo build --release
-cargo run --release -- --world "/path/to/minecraft/world" --output ./generated --export-map --no-caves
+cargo run --release -- --world "/path/to/minecraft/world" --output ./generated --export-map --max-below-sea-level 10
 ```
 
 Replace the world path with a Minecraft Java world folder containing `region/`
@@ -83,22 +87,30 @@ water states with missing or invalid levels are excluded. Waterlogged blocks,
 kelp, seagrass and bubble columns continue to count as water-containing blocks.
 This can break a connection made solely by a waterfall or flowing stream.
 
-Use `--no-caves`, as in the examples, to exclude roofed underground pools from
-both counts and exported geometry. Exclusion happens during scanning, before
-4x4 cell aggregation, so a cave column cannot be counted as surface water merely
-because most of its neighboring columns are exposed. Without this flag, cave
-scanning remains available and labels underground pools with the `cave` modifier;
-cells containing both surface and cave columns use a majority classification.
+Use `--max-below-sea-level 10`, as in the examples, to retain water whose
+**topmost water block Y is at least `sea_level - 10`**. At sea level 63 this means
+Y=53 is included and Y=52 is excluded. The cutoff applies to each column before
+4x4 averaging, region connectivity or merging. It uses the water surface, not the
+seabed: deep oceans keep their full depth measurements.
 
-This is a surface-exposure check, not a cutoff that removes every block below sea
-level. The water under an exposed ocean surface is still used to measure ocean
-depth, and exposed lakes below sea level remain valid water bodies. Ice, snow and
-lily pads are recognized as surface covers.
+This mode searches beneath terrain and keeps covered rivers and other qualifying
+water at or above the cutoff. Retained covered water participates in normal
+biome/shape classification and is shown in the maps; it is not forced into the
+`cave` lake class or hidden merely because it has a roof. Height alone also keeps
+any shallow underground pond above the cutoff. The scanner first detects sea
+level from exposed water, then rescans with the height rule. `--sea-level` can
+override the detected level.
+
+`--no-caves` is a separate, stricter option that excludes **all** covered water,
+including rivers through mountains. It cannot be combined with the height rule.
+With neither option, the original cave scan and cave-modifier classification are
+available. Flowing water is excluded in every mode. Ice, snow and lily pads remain
+recognized as surface covers.
 
 ## Usage
 
 ```bash
-water-analyzer --world "./server/world" --output "./generated" --no-caves
+water-analyzer --world "./server/world" --output "./generated" --max-below-sea-level 10
 ```
 
 Options:
@@ -118,7 +130,8 @@ Options:
 | `--min-river-merge <n>` | merge river regions smaller than N columns into adjoining rivers, default 5000; 0 disables this extra pass |
 | `--min-sea-merge <n>` | merge actual sea regions smaller than N columns into adjoining sea regions, default 0 (off) |
 | `--ocean-map-min-area <n>` | minimum ocean colour-patch area in the overview, default 10000; 0 disables the visual sieve |
-| `--no-caves` | skip water that cannot see the sky |
+| `--max-below-sea-level <n>` | retain water surfaces at or above sea level minus N, including covered rivers; off unless specified |
+| `--no-caves` | skip all water that cannot see the sky; incompatible with the height rule |
 | `--min-cave-body <n>` | smallest cave pool to report; defaults to `--min-water-body` |
 | `--min-sea-body <n>` | connected ocean-biome columns needed to be a sea, default 2 000 000 |
 
@@ -546,11 +559,12 @@ only that visual setting does **not** reduce the exported region count.
 A balanced starting point for this world is:
 
 ```bash
-cargo run --release -- --world "/path/to/world" --output ./generated --export-map --no-caves --min-water-body 200 --min-river-merge 5000 --min-sea-merge 10000 --ocean-map-min-area 10000
+cargo run --release -- --world "/path/to/world" --output ./generated --export-map --max-below-sea-level 10 --min-water-body 200 --min-river-merge 5000 --min-sea-merge 10000 --ocean-map-min-area 10000
 ```
 
-The command above excludes underground water with `--no-caves`. To include
-underground pools, remove that flag and start with `--min-cave-body 4000` and inspect which smaller cave pools disappear.
+The command above uses a height cutoff and retains covered mountain rivers.
+For the original unrestricted cave scan, remove `--max-below-sea-level 10`;
+start with `--min-cave-body 4000` to filter small cave-classified pools.
 Cave pools dominate the total region count in the example world, so filtering
 them has a much larger effect on the total than changing surface-water labels.
 
