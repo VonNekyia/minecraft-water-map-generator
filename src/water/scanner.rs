@@ -301,7 +301,6 @@ pub fn scan_region_file(
         // Surface-land metadata is independent of water. Dry banks in a wholly
         // dry chunk must still be available to a river in the neighbouring chunk.
         water.set_dryland(raw.index, scan_dryland(&buf, &parsed, &ctx.scratch, registry, &mut ctx.mb));
-
         let scanned = scan_chunk(
             &buf,
             &parsed,
@@ -313,6 +312,10 @@ pub fn scan_region_file(
             &mut stats,
             options,
         );
+        // Reuse the surface heightmap and accepted water mask. Water at a bank
+        // must not lower the land height of its shared 4x4 cell. Fully dry
+        // chunks still contribute terrain after the no-water fast path.
+        water.set_terrain(raw.index, terrain_cells(&parsed, &ctx.mb, scanned.as_ref()));
         if let Some(cw) = scanned {
             stats.water_chunks += 1;
             stats.water_columns += cw.water_cols as u64;
@@ -348,6 +351,27 @@ fn scan_dryland(
         }
     }
     mask
+}
+
+/// A lightweight terrain hint: the lowest valid non-water heightmap surface in
+/// each 4x4 cell. The accepted water mask excludes water/mud from shore-land
+/// minima. Water-only cells remain unknown; their floor stays in CellInfo.
+/// Taking the minimum reduces individual tree/cover outliers without decoding
+/// additional blocks. Continuous canopy or a roof can still bias it upward.
+fn terrain_cells(parsed: &ParsedChunk, heights: &[u16; 256], water: Option<&ChunkWater>) -> [i16; 16] {
+    let mut terrain = [i16::MIN; 16];
+    for z in 0..16 {
+        for x in 0..16 {
+            if water.is_some_and(|chunk| chunk.get(x, z)) { continue; }
+            let h = heights[z * 16 + x];
+            if h == 0 { continue; }
+            let Ok(y) = i16::try_from(parsed.min_y() + i32::from(h) - 1) else { continue };
+            if y == i16::MIN { continue; }
+            let cell = &mut terrain[(z >> 2) * 4 + (x >> 2)];
+            if *cell == i16::MIN || y < *cell { *cell = y; }
+        }
+    }
+    terrain
 }
 
 /// Water column found by one column probe.
@@ -876,6 +900,78 @@ mod tests {
                 ScanOptions { caves: true, min_surface_y: Some(53) },
             ).is_none(), "land metadata must not create water geometry for {name}");
         }
+    }
+
+    #[test]
+    fn terrain_metadata_reuses_heightmaps_even_in_water_free_chunks() {
+        let (buf, mut scratch, mut parsed) = swamp_fixture(true);
+        let registry = BiomeRegistry::vanilla_only();
+        // All solid stone; the existing packed heightmap still gives Y=53.
+        scratch.sections[0].block_pal = (1, 1);
+        let mut heights = [0; 256];
+        scan_dryland(&buf, &parsed, &scratch, &registry, &mut heights);
+        assert_eq!(terrain_cells(&parsed, &heights, None), [53; 16]);
+        assert!(scan_chunk(
+            &buf, &parsed, &registry, &scratch, &mut SectionCache::default(),
+            &mut [0; 256], &mut [0; 256], &mut ScanStats::default(),
+            ScanOptions { caves: true, min_surface_y: Some(53) },
+        ).is_none());
+
+        // WORLD_SURFACE is the existing fallback when MOTION_BLOCKING is absent.
+        parsed.heightmaps.world_surface = parsed.heightmaps.motion_blocking;
+        parsed.heightmaps.motion_blocking = PackedRef::default();
+        scan_dryland(&buf, &parsed, &scratch, &registry, &mut heights);
+        assert_eq!(terrain_cells(&parsed, &heights, None), [53; 16]);
+        parsed.heightmaps.world_surface = PackedRef::default();
+        scan_dryland(&buf, &parsed, &scratch, &registry, &mut heights);
+        assert_eq!(terrain_cells(&parsed, &heights, None), [i16::MIN; 16],
+            "missing heightmaps must not reuse previous chunk heights");
+    }
+
+    #[test]
+    fn terrain_cell_minimum_ignores_missing_columns_and_preserves_negative_y() {
+        let (_, _, mut parsed) = swamp_fixture(true);
+        parsed.min_section_y = -4;
+        let mut heights = [0; 256];
+        heights[0] = 150; // Tall canopy in the same cell must not dominate.
+        heights[3 * 16 + 3] = 22; // Ground Y=-43 at another corner.
+        heights[4] = 65; // The next cell is Y=0.
+        let terrain = terrain_cells(&parsed, &heights, None);
+        assert_eq!(terrain[0], -43);
+        assert_eq!(terrain[1], 0);
+        assert!(terrain[2..].iter().all(|&y| y == i16::MIN));
+    }
+
+    #[test]
+    fn mixed_shore_terrain_uses_land_height_instead_of_water_height() {
+        let (_, _, mut parsed) = swamp_fixture(true);
+        parsed.min_section_y = 0;
+        let mut heights = [71; 256]; // Actual dry banks at Y=70.
+        let mut water = ChunkWater::default();
+        for z in 0..4 {
+            for x in 0..8 {
+                if x == 3 { continue; } // This land column shares a cell with water.
+                heights[z * 16 + x] = 64; // Water at Y=63.
+                water.set(x, z);
+                water.water_cols += 1;
+            }
+        }
+        let original_mask = water.mask;
+        assert_eq!(terrain_cells(&parsed, &heights, None)[0], 63,
+            "an unfiltered minimum would incorrectly flatten the bank");
+        let terrain = terrain_cells(&parsed, &heights, Some(&water));
+        assert_eq!(terrain[0], 70, "the mixed shoreline cell must retain its land height");
+        assert_eq!(terrain[1], i16::MIN, "a water-only cell has no measured land height");
+        assert_eq!(terrain[2], 70, "dry cells retain their original height");
+        assert_eq!(water.mask, original_mask, "terrain sampling never changes accepted water");
+        let mut region = RegionWater::new(0, 0);
+        region.set_terrain(0, terrain);
+        region.insert(0, water);
+        let grid = crate::water::grid::WorldGrid::build(vec![region]);
+        assert_eq!(grid.terrain_y_at(3, 0), Some(70));
+        assert_eq!(grid.terrain_y_at(4, 0), None);
+        assert!(grid.is_water(2, 0));
+        assert!(!grid.is_water(3, 0));
     }
 
     #[test]

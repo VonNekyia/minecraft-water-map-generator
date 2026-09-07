@@ -84,6 +84,10 @@ pub struct RegionWater {
     /// Arid surface-land biome cells, including chunks with no retained water.
     /// Kept separately so reading riverbanks never creates extra water geometry.
     dryland: Box<[u16; CHUNKS_PER_REGION]>,
+    /// Approximate land surface Y for each 4x4 cell, including dry chunks.
+    /// Accepted water columns are excluded. `i16::MIN` denotes no valid land
+    /// heightmap data, including water-only cells. Stored independently of water.
+    terrain: Box<[[i16; 16]; CHUNKS_PER_REGION]>,
 }
 
 #[allow(dead_code)]
@@ -95,6 +99,7 @@ impl RegionWater {
             index: Box::new([u16::MAX; CHUNKS_PER_REGION]),
             chunks: Vec::new(),
             dryland: Box::new([0; CHUNKS_PER_REGION]),
+            terrain: Box::new([[i16::MIN; 16]; CHUNKS_PER_REGION]),
         }
     }
 
@@ -110,6 +115,15 @@ impl RegionWater {
 
     pub fn dryland_cell(&self, chunk_index: usize, cell: usize) -> bool {
         self.dryland[chunk_index] & (1 << cell) != 0
+    }
+
+    pub fn set_terrain(&mut self, chunk_index: usize, heights: [i16; 16]) {
+        self.terrain[chunk_index] = heights;
+    }
+
+    pub fn terrain_cell(&self, chunk_index: usize, cell: usize) -> Option<i16> {
+        let y = self.terrain[chunk_index][cell];
+        (y != i16::MIN).then_some(y)
     }
 
     #[inline]
@@ -236,6 +250,18 @@ impl WorldGrid {
             .map(|c| c.cell((x & 15) as usize, (z & 15) as usize))
     }
 
+    /// Minimum valid non-water surface height in the containing 4x4 cell. This
+    /// is also available on land with no retained water; cells containing only
+    /// accepted water have no land height. Heightmaps can include tree
+    /// canopies and roofs, so this is a terrain-plausibility hint, not an exact
+    /// bare-ground measurement. Water floor estimates remain in `CellInfo`.
+    pub fn terrain_y_at(&self, x: i32, z: i32) -> Option<i16> {
+        let region = self.region(x >> 9, z >> 9)?;
+        let chunk = (((z >> 4) & 31) * REGION_CHUNKS as i32 + ((x >> 4) & 31)) as usize;
+        let cell = (((z & 15) >> 2) * 4 + ((x & 15) >> 2)) as usize;
+        region.terrain_cell(chunk, cell)
+    }
+
     /// Fills `keys` with `0` for every water column of a region file and
     /// [`NONE`](crate::water::components::NONE) elsewhere, ready for labelling.
     /// Returns whether the tile holds any water at all.
@@ -332,5 +358,40 @@ mod tests {
         assert!(!grid.is_water(5000, 5000));
         assert!(!grid.is_water(-5000, -5000));
         assert!(grid.region(1, 0).is_none());
+    }
+
+    #[test]
+    fn terrain_metadata_resolves_dry_chunks_and_negative_coordinates() {
+        let mut region = RegionWater::new(-1, -1);
+        let mut terrain = [i16::MIN; 16];
+        terrain[0] = -40;
+        terrain[15] = 72;
+        region.set_terrain(31 * REGION_CHUNKS + 31, terrain);
+        let grid = WorldGrid::build(vec![region]);
+        assert_eq!(grid.terrain_y_at(-16, -16), Some(-40));
+        assert_eq!(grid.terrain_y_at(-13, -13), Some(-40));
+        assert_eq!(grid.terrain_y_at(-4, -4), Some(72));
+        assert_eq!(grid.terrain_y_at(-1, -1), Some(72));
+        assert_eq!(grid.terrain_y_at(-12, -16), None, "unknown cell stays unknown");
+        assert_eq!(grid.terrain_y_at(-17, -1), None, "unscanned chunk stays unknown");
+        assert_eq!(grid.terrain_y_at(0, 0), None, "absent region stays unknown");
+        assert_eq!(grid.total_water_columns(), 0);
+        assert!(grid.chunk_at(-1, -1).is_none());
+        assert!(!grid.is_water(-1, -1));
+    }
+
+    #[test]
+    fn terrain_metadata_does_not_change_existing_water_mask() {
+        let mut region = RegionWater::new(0, 0);
+        let mut water = ChunkWater::default();
+        water.set(3, 9);
+        water.water_cols = 1;
+        let original_mask = water.mask;
+        region.insert(0, water);
+        region.set_terrain(0, [64; 16]);
+        let grid = WorldGrid::build(vec![region]);
+        assert_eq!(grid.chunk_at(3, 9).unwrap().mask, original_mask);
+        assert_eq!(grid.total_water_columns(), 1);
+        assert_eq!(grid.terrain_y_at(3, 9), Some(64));
     }
 }

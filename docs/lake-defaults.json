@@ -1,0 +1,16 @@
+{
+  "core_radius": 18,
+  "density_8": 0.90,
+  "density_16": 0.82,
+  "density_32": 0.80,
+  "min_core_area": 64,
+  "min_lake_area": 2000,
+  "neck_width_ratio": 0.55,
+  "river_seed_distance_factor": 2.0,
+  "min_channel_length": 32,
+  "max_channel_elongation": 8.0,
+  "min_confidence": 0.58,
+  "terrain_rise": 1,
+  "flow_head_difference": 1.0,
+  "connection_sample_distance": 24
+}

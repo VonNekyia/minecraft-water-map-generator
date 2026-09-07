@@ -6,6 +6,7 @@ pub mod components;
 pub mod consolidate;
 pub mod grid;
 pub mod kinds;
+pub mod lakes;
 pub mod model;
 pub mod oceans;
 pub mod proximity;

@@ -583,6 +583,28 @@ fn empty_tile() -> TileResult {
     }
 }
 
+impl RegionStats {
+    /// Refresh final-output counts after inland refinement; retain scan/pass stats.
+    pub fn recount(&mut self, regions: &[WaterRegion], river_min: u32, sea_min: u32) {
+        self.regions = regions.len() as u32;
+        self.by_kind = [0; 4];
+        self.with_ice = 0; self.with_corals = 0; self.with_desert = 0;
+        self.with_mangrove = 0; self.with_cave = 0;
+        self.small_rivers = 0; self.small_seas = 0; self.geometry_runs = 0;
+        for r in regions {
+            self.by_kind[r.kind as usize] += 1;
+            self.with_ice += u32::from(r.modifiers.contains(Modifiers::ICE));
+            self.with_corals += u32::from(r.modifiers.contains(Modifiers::CORALS));
+            self.with_desert += u32::from(r.modifiers.contains(Modifiers::DESERT));
+            self.with_mangrove += u32::from(r.modifiers.contains(Modifiers::MANGROVE));
+            self.with_cave += u32::from(r.modifiers.contains(Modifiers::CAVE));
+            self.small_rivers += u32::from(r.kind == WaterKind::River && r.geometry.column_count < river_min);
+            self.small_seas += u32::from(r.kind == WaterKind::Sea && r.geometry.column_count < sea_min);
+            self.geometry_runs += r.geometry.runs.len() as u64;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

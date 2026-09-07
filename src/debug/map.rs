@@ -51,14 +51,14 @@ impl Default for MapOptions {
 // Canvas
 // ---------------------------------------------------------------------------
 
-struct Canvas {
+pub(super) struct Canvas {
     w: usize,
     h: usize,
     px: Vec<u8>,
 }
 
 impl Canvas {
-    fn new(w: usize, h: usize, bg: [u8; 3]) -> Self {
+    pub(super) fn new(w: usize, h: usize, bg: [u8; 3]) -> Self {
         let mut px = Vec::with_capacity(w * h * 3);
         for _ in 0..w * h {
             px.extend_from_slice(&bg);
@@ -67,7 +67,7 @@ impl Canvas {
     }
 
     #[inline]
-    fn set(&mut self, x: usize, y: usize, c: [u8; 3]) {
+    pub(super) fn set(&mut self, x: usize, y: usize, c: [u8; 3]) {
         if x >= self.w || y >= self.h {
             return;
         }
@@ -77,7 +77,7 @@ impl Canvas {
         self.px[i + 2] = c[2];
     }
 
-    fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, c: [u8; 3]) {
+    pub(super) fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, c: [u8; 3]) {
         for yy in y..(y + h).min(self.h) {
             for xx in x..(x + w).min(self.w) {
                 self.set(xx, yy, c);
@@ -85,7 +85,7 @@ impl Canvas {
         }
     }
 
-    fn text(&mut self, x: usize, y: usize, scale: usize, text: &str, c: [u8; 3]) {
+    pub(super) fn text(&mut self, x: usize, y: usize, scale: usize, text: &str, c: [u8; 3]) {
         let mut cx = x;
         for ch in text.chars() {
             let g = font::glyph(ch);
@@ -100,7 +100,7 @@ impl Canvas {
         }
     }
 
-    fn write_png(&self, path: &Path) -> std::io::Result<u64> {
+    pub(super) fn write_png(&self, path: &Path) -> std::io::Result<u64> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }

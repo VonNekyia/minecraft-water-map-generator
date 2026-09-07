@@ -64,12 +64,24 @@ struct Cli {
     #[arg(long, default_value_t = 8)]
     map_scale: u32,
 
+    /// Write technical lake fields, candidate confidence and connection diagnostics.
+    #[arg(long, conflicts_with = "no_lake_detection")]
+    lake_debug: bool,
+
+    /// JSON overrides for lake core, density, neck and confidence thresholds.
+    #[arg(long, conflicts_with = "no_lake_detection")]
+    lake_config: Option<PathBuf>,
+
+    /// Use the original inland classifier for comparison, without lake refinement.
+    #[arg(long)]
+    no_lake_detection: bool,
+
     /// Override the detected sea level instead of deriving it from the world.
     #[arg(long)]
     sea_level: Option<i16>,
 
-    /// Smallest body of water to report, in columns. Bodies below this are
-    /// dropped, and classification pieces below it always merge into a neighbour.
+    /// Smallest body to retain before lake refinement, in columns. The later
+    /// lake/channel cuts preserve water and may create smaller output pieces.
     #[arg(long, default_value_t = config::MIN_WATER_BODY_COLUMNS)]
     min_water_body: u32,
 
@@ -117,6 +129,11 @@ fn main() {
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
     let started = Instant::now();
+    let lake_options: water::lakes::LakeOptions = match &cli.lake_config {
+        Some(path) => serde_json::from_slice(&std::fs::read(path)?)?,
+        None => water::lakes::LakeOptions::default(),
+    };
+    lake_options.validate()?;
 
     let region_dir = cli.world.join("region");
     if !region_dir.is_dir() {
@@ -213,8 +230,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let mut region_waters = Vec::with_capacity(scans.len());
     for s in scans {
         stats = stats.merge(s.stats);
-        // Water-free regions are kept: they cost 2 KiB each and they are what
-        // makes the world bounds (and therefore the spatial index) cover the
+        // Water-free regions are kept: their indices and terrain cost 36 KiB and
+        // make the world bounds (and therefore the spatial index) cover the
         // whole generated world rather than just its wet parts.
         region_waters.push(s.water);
     }
@@ -248,7 +265,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let min_cave_body = cli.min_cave_body.unwrap_or(cli.min_water_body);
     let regions_started = Instant::now();
     let grid = WorldGrid::build(region_waters);
-    let (regions, region_stats) =
+    let (mut regions, mut region_stats) =
         water::regions::build_regions(
             &grid,
             &registry,
@@ -260,6 +277,19 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 sea_min_area: cli.min_sea_merge,
             },
         );
+    if !cli.no_lake_detection {
+        println!("  lake detection         one-block inland mask, cores and channel bottlenecks");
+        let lake_started = Instant::now();
+        let analysis = water::lakes::analyze(&grid, &regions, &lake_options);
+        println!("  lake candidates        {} accepted / {} cores ({:.1}s)",
+            analysis.candidates.iter().filter(|c| c.accepted).count(), analysis.candidates.len(),
+            lake_started.elapsed().as_secs_f64());
+        if cli.lake_debug {
+            debug::lakes::write(&cli.output.join("debug/lakes"), &grid, &analysis, cli.map_scale)?;
+        }
+        water::lakes::apply(&mut regions, &analysis);
+        region_stats.recount(&regions, cli.min_river_merge, cli.min_sea_merge);
+    }
     let regions_seconds = regions_started.elapsed().as_secs_f64();
 
     // ---- output ------------------------------------------------------------
@@ -361,7 +391,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     println!("  riverbank repair       {} groups, {} columns", region_stats.bank_groups, region_stats.bank_columns);
     println!("  river regions merged   {}", region_stats.merged_rivers);
     println!("  sea regions merged     {}", region_stats.merged_seas);
-    println!("  small unmergeable      {} rivers, {} seas", region_stats.small_rivers, region_stats.small_seas);
+    let small_label = if cli.no_lake_detection { "small unmergeable" } else { "small output pieces" };
+    println!("  {small_label:<22} {} rivers, {} seas", region_stats.small_rivers, region_stats.small_seas);
     println!("  geometry runs          {}", region_stats.geometry_runs);
     println!();
     println!("output");
@@ -573,6 +604,9 @@ mod tests {
             json_limit: None,
             export_map: false,
             map_scale: 8,
+            lake_debug: false,
+            lake_config: None,
+            no_lake_detection: false,
             sea_level: None,
             min_water_body: config::MIN_WATER_BODY_COLUMNS,
             min_river_merge: config::RIVER_MERGE_MIN_COLUMNS,

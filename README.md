@@ -14,9 +14,13 @@ These samples use source water and raw mud with `--max-below-sea-level 10
 At sea level 63, water surfaces at Y=53 or above qualify, including water under
 mountains. Flowing/falling water and lower water surfaces are excluded before
 classification; merging and the 2,000-column minimum then remove small regions.
-The current export contains 2,336 regions: 148 seas, 955 rivers, 1,081 lakes and
-152 swamps. Raw mud expands the retained swamp area from 1.84 to 7.89 million
-square blocks; the desert/canyon modifier applies to 91 regions.
+The current export contains 6,712 regions: 148 seas, 4,474 rivers, 1,938 lakes and
+152 swamps. The lake pass accepts 1,521 geographic candidates; region IDs also
+split on inherited water attributes. Raw mud contributes to the 7.89 million
+square blocks of swamp; the desert/canyon modifier applies to 222 regions.
+The earlier classifier produced 2,336 regions. The additional lake/channel cuts
+preserve exactly the same 351,359,105 retained water columns; short channels and
+attribute fragments can now be smaller than the earlier 2,000-column cleanup floor.
 The height rule also admits shallow covered ponds; the area floor
 removes small isolated ones. Desert rivers and lakes use lighter sand colours.
 
@@ -83,6 +87,14 @@ their own decisions.
 
 ## Which water counts
 
+Lake detection now refines retained inland water using one-block shore distance,
+local density, lake cores and narrow channel transitions. See
+[lake detection and diagnostic layers](docs/lake-detection.md) for the algorithm,
+configurable thresholds and `--lake-debug` inspection workflow. Ocean zones and
+the existing water mask are preserved. `--no-lake-detection` reproduces the earlier
+inland classifier for comparison. Historical comparisons farther below describe
+the older pipeline and explicitly note their water-filter settings.
+
 Ordinary `minecraft:water` counts only with `Properties.level=0` (source water).
 Levels 1-15 (flowing and falling water), the `flowing_water` block name, and
 water states with missing or invalid levels are excluded. Waterlogged blocks,
@@ -133,6 +145,9 @@ Options:
 | `--export-json` | also write `debug/water_regions.json` |
 | `--json-limit <n>` | export only the N largest regions to JSON |
 | `--export-map` | also write the six debug PNGs (classification, regions, depth, oceans, inland, combined) |
+| `--lake-debug` | optional lake fields, cores, cuts, flow points and candidate-confidence JSON |
+| `--lake-config <file>` | JSON lake-threshold overrides; see `docs/lake-defaults.json` |
+| `--no-lake-detection` | disable the new lake pass for comparison with the earlier classifier |
 | `--map-scale <n>` | blocks per pixel in the debug maps, default 8 |
 | `--sea-level <y>` | override the detected sea level |
 | `--min-water-body <n>` | minimum retained water-region area, default 200 columns; final pieces below it are dropped |
@@ -527,7 +542,20 @@ not, and the data says so.
   no sea, river or swamp without a sky - and they never merge with water above
   them, in either direction, even where they share an `x`/`z` column.
 
-### 8. Output
+### 8. Lake reconstruction at one-block resolution
+
+The final inland pass finds broad lake interiors from shore distance and local
+water density, separates narrower river connections, and reconstructs the lake
+using the retained Minecraft water mask. It adds terrain and water-head evidence
+to a configurable confidence score. Oceans, swamps and cave-classified regions
+keep their existing geometry and attributes.
+
+See [lake detection](docs/lake-detection.md) for each stage, all thresholds, and
+the optional diagnostic PNGs. Additional lake/channel boundaries can increase
+the number of exported region IDs. They do not add or remove water; short real
+channels and small attribute pieces can survive below the earlier cleanup floor.
+
+### 9. Output
 
 See [FORMAT.md](FORMAT.md) for the binary layout and a minimal Java reader.
 
@@ -535,6 +563,11 @@ See [FORMAT.md](FORMAT.md) for the binary layout and a minimal Java reader.
 
 There are two independent area controls, measured in horizontal water columns
 (one column is one square block of water surface):
+
+These controls run before the final lake refinement. Its new lake/channel cuts
+preserve water geometry, so the final region count is not bounded by the earlier
+area floor. Increase lake core radius/density to accept fewer broadened sections;
+use `--no-lake-detection` to reproduce the historical cleanup comparisons below.
 
 * **Retention** (`--min-water-body`, default 200): surviving regions below this
   size are removed. Raising it can remove isolated ponds, short streams and fine
@@ -724,7 +757,14 @@ round-trip through the binary format.
 
 ## Performance
 
-Measured on the 30 GB / 2509 region world this was built against, 24 threads:
+The current lake-enabled sample run scans 2,509 region files and 2.45 million
+generated chunks in 164 seconds on 24 threads. Lake analysis itself takes 12.1
+seconds, before debug rendering and output splitting. Peak process working set
+was 3.09 GiB. See [lake validation](docs/lake-detection.md#sample-world-validation)
+for the exact mask and protected-ocean checks. Times depend on hardware and caches.
+
+Historical measurement before source-only water, mud support and lake refinement,
+on the same 30 GB / 2509 region world, 24 threads:
 
 Defaults (`--min-water-body 200`, caves included):
 

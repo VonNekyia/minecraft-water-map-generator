@@ -2,5 +2,6 @@
 
 pub mod font;
 pub mod json;
+pub mod lakes;
 pub mod map;
 mod sieve;
