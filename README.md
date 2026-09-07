@@ -14,10 +14,13 @@ These samples use source water and raw mud with `--max-below-sea-level 10
 At sea level 63, water surfaces at Y=53 or above qualify, including water under
 mountains. Flowing/falling water and lower water surfaces are excluded before
 classification; merging and the 2,000-column minimum then remove small regions.
-The current export contains 6,712 regions: 148 seas, 4,474 rivers, 1,938 lakes and
-152 swamps. The lake pass accepts 1,521 geographic candidates; region IDs also
+The current export contains 5,285 regions: 148 seas, 3,677 rivers, 1,308 lakes and
+152 swamps. The lake pass accepts 1,105 geographic candidates; region IDs also
 split on inherited water attributes. Raw mud contributes to the 7.89 million
-square blocks of swamp; the desert/canyon modifier applies to 222 regions.
+square blocks of swamp; the desert/canyon modifier applies to 165 regions.
+The default basin-fill check keeps winding, sprawling water networks as rivers:
+lake-labelled area is 49.1% lower than in the previous refinement, with the same
+water geometry. `min_basin_fill` controls this river/lake bias.
 The earlier classifier produced 2,336 regions. The additional lake/channel cuts
 preserve exactly the same 351,359,105 retained water columns; short channels and
 attribute fragments can now be smaller than the earlier 2,000-column cleanup floor.
@@ -546,7 +549,8 @@ not, and the data says so.
 
 The final inland pass finds broad lake interiors from shore distance and local
 water density, separates narrower river connections, and reconstructs the lake
-using the retained Minecraft water mask. It adds terrain and water-head evidence
+using the retained Minecraft water mask. A rotation-aware footprint check rejects
+winding river candidates while allowing elongated diagonal lakes. It adds terrain and water-head evidence
 to a configurable confidence score. Oceans, swamps and cave-classified regions
 keep their existing geometry and attributes.
 
@@ -758,7 +762,7 @@ round-trip through the binary format.
 ## Performance
 
 The current lake-enabled sample run scans 2,509 region files and 2.45 million
-generated chunks in 164 seconds on 24 threads. Lake analysis itself takes 12.1
+generated chunks in 201 seconds on 24 threads. Lake analysis itself takes 15.8
 seconds, before debug rendering and output splitting. Peak process working set
 was 3.09 GiB. See [lake validation](docs/lake-detection.md#sample-world-validation)
 for the exact mask and protected-ocean checks. Times depend on hardware and caches.

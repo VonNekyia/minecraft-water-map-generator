@@ -5,6 +5,7 @@
 //! swamp, cave water and the union of retained water columns are protected.
 
 mod detection;
+mod geometry;
 mod output;
 pub mod raster;
 
@@ -22,6 +23,8 @@ pub struct LakeOptions {
     pub density_32: f32,
     pub min_core_area: u32,
     pub min_lake_area: u32,
+    /// Minimum water occupancy of the candidate's axis/PCA-oriented footprint.
+    pub min_basin_fill: f32,
     pub neck_width_ratio: f32,
     pub river_seed_distance_factor: f32,
     pub min_channel_length: u16,
@@ -41,6 +44,7 @@ impl Default for LakeOptions {
             density_32: 0.80,
             min_core_area: 64,
             min_lake_area: 2000,
+            min_basin_fill: 0.45,
             neck_width_ratio: 0.55,
             river_seed_distance_factor: 2.0,
             min_channel_length: 32,
@@ -64,6 +68,7 @@ impl LakeOptions {
             ("density_16", self.density_16),
             ("density_32", self.density_32),
             ("min_confidence", self.min_confidence),
+            ("min_basin_fill", self.min_basin_fill),
         ] {
             anyhow::ensure!(
                 value.is_finite() && (0.0..=1.0).contains(&value),
@@ -121,6 +126,8 @@ pub struct LakeCandidate {
     pub density_16: f32,
     pub density_32: f32,
     pub channel_elongation: f32,
+    pub axis_fill_ratio: f32,
+    pub basin_fill_ratio: f32,
     pub terrain_basin_score: f32,
     pub terrain_sample_coverage: f32,
     pub inflow_count: u32,

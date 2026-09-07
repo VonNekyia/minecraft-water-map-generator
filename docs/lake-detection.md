@@ -41,7 +41,16 @@ can split a retained region into smaller attribute pieces without deleting water
    Tiny stranded bank tips (up to `min_core_area`) rejoin their single adjacent
    basin. Even shorter real channels touching two basins or protected water remain.
    Low-quality cuts remain visible in diagnostics and reduce widening confidence.
-7. **Plausibility:** sample adjacent land above water and water heads along
+7. **Basin occupancy:** measure how much of its overall footprint the reconstructed
+   candidate fills. Divide its water area by the smaller of two enclosing
+   rectangles: the world-axis bounding box and a rectangle aligned with its
+   principal direction (PCA). Include the full projected block squares in both
+   extents. The default requires a fill ratio of at least **0.45**. A broad,
+   winding river can have a confident core yet occupy little of its footprint;
+   this gate keeps it a river. The oriented rectangle lets an elongated diagonal
+   lake qualify without requiring it to fill a large world-axis rectangle. No
+   water or shoreline is moved to calculate this measurement.
+8. **Plausibility:** sample adjacent land above water and water heads along
    connected channels. Combine geometry, density, core support, relative widening,
    area, terrain and outlet plausibility into separate scores plus confidence.
    Uniform elongated channels without narrower connections at both longitudinal
@@ -76,10 +85,25 @@ of its fields. Unknown fields and invalid values fail before scanning. Defaults:
 | `river_seed_distance_factor` | 2.0 | Persistent-channel distance relative to core radius |
 | `min_channel_length` | 32 | Minimum marker distance and connected medial-ridge span |
 | `max_channel_elongation` | 8.0 | Area / maximum-width squared limit without opposed end necks |
+| `min_basin_fill` | 0.45 | Minimum water area / fitted footprint area; 0 disables this gate |
 | `min_confidence` | 0.58 | Minimum combined candidate confidence |
 | `terrain_rise` | 1 | Required land rise above water for positive bank evidence |
 | `flow_head_difference` | 1.0 | Minimum measured head difference to infer a flow direction |
 | `connection_sample_distance` | 24 | Channel sampling distance from the neck |
+
+**For more rivers, raise `min_basin_fill`; for more intricate lakes, lower it.**
+For example, a partial configuration containing `{"min_basin_fill": 0.50}`
+demands that each lake occupy at least half of its fitted footprint. This is an
+acceptance test, not a shoreline simplification setting: a rejected candidate
+keeps its exact water mask and receives the river label. Complex lakes with
+several connected basins, long bays, or large islands may occupy little of their
+footprint and need a lower threshold. The PCA rectangle is an approximation to
+the best-fitting rectangle, not an exact minimum-area rectangle.
+
+Set `{"min_basin_fill": 0.0}` to disable the new occupancy gate and reproduce the
+previous lake-refinement classifier with the same world and other settings.
+Core, density, neck and confidence defaults remain unchanged. This differs from
+`--no-lake-detection`, which bypasses the entire lake-refinement pass.
 
 Raise core radius or density thresholds to demand broader lake interiors. Lower
 them for smaller or narrower lakes, checking that wide rivers do not become lake
@@ -100,7 +124,10 @@ cargo run --release -- --world /path/to/world --output generated-lakes \
 `--lake-debug` writes `debug/lakes/lake_candidates.json` and separate diagnostic
 PNGs for raw inland water, width, all three densities, cores, reconstructed lakes,
 necks, connection directions, and rejected candidates. The JSON retains individual
-scores, acceptance/rejection reasons, bounds and connection coordinates. These
+scores, acceptance/rejection reasons, bounds and connection coordinates. The
+`axis_fill_ratio` and `basin_fill_ratio` fields expose occupancy before and after
+the orientation adjustment; `channel_like_footprint` identifies rejection by
+`min_basin_fill`. These
 technical layers do not appear on the normal combined map or add gameplay types.
 
 Use `--no-lake-detection` with the same world and other arguments for an ablation
@@ -129,7 +156,13 @@ The same cut logic handles diagonal river mouths:
 
 ![Diagonal river connections retain the original lake outline](images/lakes/diagonal-reconstructed.png)
 
-Regenerate all stage PNGs for round, elongated, diagonal and linked lakes with:
+The occupancy check keeps this broad meandering channel as river even though
+it contains a confident core. Its fitted footprint is only 28% water:
+
+![Broad winding water remains river instead of becoming a lake](images/lakes/winding-river.png)
+
+Regenerate stage PNGs for round, elongated, diagonal and linked lakes, plus the
+winding river, with:
 
 ```bash
 cargo test export_synthetic_lake_diagnostics -- --ignored
@@ -137,24 +170,29 @@ cargo test export_synthetic_lake_diagnostics -- --ignored
 
 Ordinary tests cover the ten requested water-network shapes, plus diagonal
 mouths, short inter-lake channels, stepped water heads, bank-fragment recovery,
-protected attributes, configuration validation and terrain evidence. Every
+wide winding rivers, closed diagonal elongated lakes, protected attributes,
+configuration validation and terrain evidence. Every
 synthetic classification test compares the canonical original and resulting RLE
 water masks and rejects overlaps.
 
 ## Sample-world validation
 
 The final run uses the command above and the documented defaults on 2,509 region
-files / 2,449,846 generated chunks. All **191 ordinary tests pass**, plus the
+files / 2,449,846 generated chunks. All **193 ordinary tests pass**, plus the
 separately invoked PNG export test.
 
-| Measurement | Previous classifier | Lake refinement |
-|---|---:|---:|
-| Retained water columns | 351,359,105 | 351,359,105 |
-| Sea columns | 282,357,242 | 282,357,242 |
-| River columns | 31,236,411 | 12,025,434 |
-| Lake columns | 29,879,633 | 49,090,610 |
-| Swamp columns | 7,885,819 | 7,885,819 |
-| Sea / river / lake / swamp region IDs | 148 / 955 / 1,081 / 152 | 148 / 4,474 / 1,938 / 152 |
+| Measurement | Original classifier | Refinement before occupancy | Current refinement |
+|---|---:|---:|---:|
+| Retained water columns | 351,359,105 | 351,359,105 | 351,359,105 |
+| Sea columns | 282,357,242 | 282,357,242 | 282,357,242 |
+| River columns | 31,236,411 | 12,025,434 | 36,151,591 |
+| Lake columns | 29,879,633 | 49,090,610 | 24,964,453 |
+| Swamp columns | 7,885,819 | 7,885,819 | 7,885,819 |
+| Sea / river / lake / swamp region IDs | 148 / 955 / 1,081 / 152 | 148 / 4,474 / 1,938 / 152 | 148 / 3,677 / 1,308 / 152 |
+
+The occupancy gate returns 24,126,157 columns to the river class, reducing
+lake-labelled area by 49.1% versus the previous refinement. Total region IDs
+decrease from 6,712 to 5,285. These are classification changes, not removed water.
 
 An independent streaming comparison verifies **all 1,404,318 canonical RLE rows**,
 with no differing or overlapping water columns. All 300 protected sea/swamp
@@ -165,13 +203,14 @@ Canonical water-mask SHA-256:
 `7eaf09570aa098208c3ca09806235eac243d06549c24dadf1b34e4342e215851`.
 
 The analysis covers 61,116,044 inland columns in 104,566,784 allocated tile cells,
-accepting 1,521 of 2,573 cores. Analysis takes 12.1 seconds; the full run takes
-163.8 seconds (including two height-filter scans, legacy cleanup, diagnostics and
+accepting 1,105 of 2,573 cores. Analysis takes 15.8 seconds; the full run takes
+201.0 seconds (including two height-filter scans, legacy cleanup, diagnostics and
 exports). Peak process working set is 3.09 GiB on the measured 24-thread machine.
 
 These measurements verify geometry and implementation behavior, not accuracy
 against manually labelled hydrological ground truth. Broad connected rivers can
-still require stricter core/density settings for a particular world. The new
+still require a higher `min_basin_fill` for a particular world; complex lakes
+with low footprint occupancy can require a lower value. The new
 transitions increase region count: short connections and inherited attribute
 fragments remain valid below the earlier retention floor. Use the region-ID and
 rejected-candidate maps to inspect them, or `--no-lake-detection` to reproduce the

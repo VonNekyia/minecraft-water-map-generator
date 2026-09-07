@@ -5,6 +5,7 @@
   "density_32": 0.80,
   "min_core_area": 64,
   "min_lake_area": 2000,
+  "min_basin_fill": 0.45,
   "neck_width_ratio": 0.55,
   "river_seed_distance_factor": 2.0,
   "min_channel_length": 32,

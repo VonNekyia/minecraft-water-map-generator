@@ -591,6 +591,7 @@ fn score_candidates(
             }
         }
     }
+    super::geometry::measure_basin_fill(r, labels, candidates);
     // One bounded channel BFS per connection; sample heads away from the neck.
     // Flat water has no identifiable flow direction and stays explicitly unknown.
     let mut seen = vec![0u32; r.len()];
@@ -695,6 +696,8 @@ fn score_candidates(
             .clamp(0.0, 1.0);
         if c.area < opts.min_lake_area {
             c.rejection = Some("candidate_too_small".into());
+        } else if c.basin_fill_ratio < opts.min_basin_fill {
+            c.rejection = Some("channel_like_footprint".into());
         } else if c.channel_elongation > opts.max_channel_elongation && !opposed_necks(c) {
             c.rejection = Some("uniform_wide_channel".into());
         } else if c.confidence < opts.min_confidence {

@@ -309,6 +309,59 @@ fn uniform_wide_river_is_not_a_lake_just_because_it_has_a_core() {
 }
 
 #[test]
+fn a_wide_winding_channel_is_not_a_lake_despite_a_large_core() {
+    let region = shape([-300, -198, 300, 198], |x, z| {
+        let center = (150.0 * (x as f64 / 100.0).sin()).round() as i32;
+        (z - center).abs() <= 48
+    });
+    let (analysis, output) = detect(region.clone());
+    assert!(
+        analysis.candidates.iter().any(|c| c.core_area >= 64),
+        "fixture must exercise a winding channel with a real core"
+    );
+    assert!(
+        output.iter().all(|r| r.kind == WaterKind::River),
+        "a wide channel meandering through its bounds must remain river"
+    );
+    assert!(analysis
+        .candidates
+        .iter()
+        .any(|c| c.rejection.as_deref() == Some("channel_like_footprint")));
+    let options = LakeOptions {
+        min_basin_fill: 0.0,
+        ..LakeOptions::default()
+    };
+    let (_, previous) = run_analysis(&WorldGrid::build(Vec::new()), vec![region], &options);
+    assert!(
+        previous.iter().any(|r| r.kind == WaterKind::Lake),
+        "disabling the new gate must reproduce the previous overclassification"
+    );
+}
+
+#[test]
+fn a_closed_elongated_lake_remains_lake_when_rotated_diagonally() {
+    let (analysis, output) = detect(shape([-120, -120, 120, 120], |x, z| {
+        let along = i64::from(x + z);
+        let across = i64::from(x - z);
+        along * along * 28 * 28 + across * across * 160 * 160 <= 2 * 160 * 160 * 28 * 28
+    }));
+    let lake = analysis.candidates.iter().find(|c| c.accepted).unwrap();
+    assert!(
+        lake.axis_fill_ratio < 0.3 && lake.basin_fill_ratio > 0.7,
+        "rotation must be measured, not merely exempted from validation"
+    );
+    assert!(
+        output.iter().all(|r| r.kind == WaterKind::Lake),
+        "orientation must not reject an otherwise compact, elongated basin"
+    );
+    assert_kind(
+        &output,
+        &[(0, 0), (-100, -100), (100, 100), (15, -15)],
+        WaterKind::Lake,
+    );
+}
+
+#[test]
 fn a_small_tributary_does_not_make_a_uniform_wide_river_a_lake() {
     let (_, output) = detect(shape([-800, -220, 800, 32], |x, z| {
         (-31..=32).contains(&z) || (-3..=4).contains(&x)
@@ -557,6 +610,7 @@ fn lake_configuration_supports_partial_overrides_and_rejects_invalid_thresholds(
         r#"{"neck_width_ratio":1.0}"#,
         r#"{"connection_sample_distance":257}"#,
         r#"{"min_core_area":0}"#,
+        r#"{"min_basin_fill":1.1}"#,
     ] {
         let options: LakeOptions = serde_json::from_str(json).unwrap();
         assert!(
@@ -601,4 +655,11 @@ fn export_synthetic_lake_diagnostics() {
             .any(|candidate| candidate.accepted));
         crate::debug::lakes::write(&directory.join(name), &grid, &analysis, 1).unwrap();
     }
+    let winding = shape([-300, -198, 300, 198], |x, z| {
+        let center = (150.0 * (x as f64 / 100.0).sin()).round() as i32;
+        (z - center).abs() <= 48
+    });
+    let (analysis, _) = run_analysis(&grid, vec![winding], &LakeOptions::default());
+    assert!(analysis.candidates.iter().all(|c| !c.accepted));
+    crate::debug::lakes::write(&directory.join("winding-river"), &grid, &analysis, 1).unwrap();
 }
