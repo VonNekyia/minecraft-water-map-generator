@@ -518,6 +518,20 @@ resolved by name - `warm_ocean` and `lukewarm_ocean` are `warm`, `cold_ocean` an
 lukewarm one). Everything else falls back to the biome's own `temperature`, with
 the thresholds in [`config.rs`](src/config.rs).
 
+Vanilla ocean biomes are built in and share the existing ocean categories with
+Terralith. They work without a datapack and do not create additional map colours:
+
+| Minecraft biome IDs | Existing ocean category |
+|---|---|
+| `minecraft:warm_ocean`, `minecraft:lukewarm_ocean`, `minecraft:deep_lukewarm_ocean` | Warm, also used by `terralith:deep_warm_ocean` |
+| `minecraft:ocean`, `minecraft:deep_ocean` | Normal (`medium` in exported data) |
+| `minecraft:cold_ocean`, `minecraft:deep_cold_ocean`, `minecraft:frozen_ocean`, `minecraft:deep_frozen_ocean` | Cold |
+
+These are classification mappings; exported dominant biome IDs retain their
+original names. A `deep_` prefix uses the same temperature category, while the
+shelf/deep colour remains determined by measured water depth. Frozen biome names
+map to cold water; the ice modifier still requires actual ice blocks.
+
 **Depth** is measured off the world and nothing else: the mean distance from the
 water surface down to the floor, banded at 10 and 30 blocks. Every kind of water
 carries one, so a shallow sea reads `shallow` and a deep lake reads `deep`. On the
