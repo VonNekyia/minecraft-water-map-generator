@@ -4,6 +4,7 @@
 //! from persistent narrow channels. Only River/Lake labels are changed; ocean,
 //! swamp, cave water and the union of retained water columns are protected.
 
+mod closed;
 mod detection;
 mod geometry;
 mod output;
@@ -11,6 +12,7 @@ pub mod raster;
 
 use crate::water::grid::WorldGrid;
 use crate::water::model::WaterRegion;
+pub use closed::ClosedWater;
 pub use raster::Raster;
 use serde::{Deserialize, Serialize};
 
@@ -23,8 +25,15 @@ pub struct LakeOptions {
     pub density_32: f32,
     pub min_core_area: u32,
     pub min_lake_area: u32,
+    /// Whole retained water bodies without an ocean path, zero disables.
+    pub max_closed_lake_area: u32,
     /// Minimum water occupancy of the candidate's axis/PCA-oriented footprint.
     pub min_basin_fill: f32,
+    /// Stronger evidence required to turn previously classified river into lake.
+    pub min_new_lake_fill: f32,
+    pub min_new_lake_core_fraction: f32,
+    /// A compact fitted footprint can support a long lake with a small core.
+    pub new_lake_compact_fill: f32,
     pub neck_width_ratio: f32,
     pub river_seed_distance_factor: f32,
     pub min_channel_length: u16,
@@ -44,7 +53,11 @@ impl Default for LakeOptions {
             density_32: 0.80,
             min_core_area: 64,
             min_lake_area: 2000,
-            min_basin_fill: 0.45,
+            max_closed_lake_area: 100000,
+            min_basin_fill: 0.25,
+            min_new_lake_fill: 0.50,
+            min_new_lake_core_fraction: 0.40,
+            new_lake_compact_fill: 0.75,
             neck_width_ratio: 0.55,
             river_seed_distance_factor: 2.0,
             min_channel_length: 32,
@@ -69,6 +82,12 @@ impl LakeOptions {
             ("density_32", self.density_32),
             ("min_confidence", self.min_confidence),
             ("min_basin_fill", self.min_basin_fill),
+            ("min_new_lake_fill", self.min_new_lake_fill),
+            (
+                "min_new_lake_core_fraction",
+                self.min_new_lake_core_fraction,
+            ),
+            ("new_lake_compact_fill", self.new_lake_compact_fill),
         ] {
             anyhow::ensure!(
                 value.is_finite() && (0.0..=1.0).contains(&value),
@@ -115,6 +134,11 @@ pub struct Connection {
 pub struct LakeCandidate {
     pub id: u32,
     pub accepted: bool,
+    /// An accepted candidate may preserve existing lake water but lack the
+    /// stronger evidence needed to relabel its previously river-classified part.
+    pub accepts_river_water: bool,
+    pub river_rejection: Option<String>,
+    pub core_fraction: f32,
     pub rejection: Option<String>,
     pub core_area: u32,
     pub area: u32,
@@ -154,13 +178,27 @@ pub struct LakeAnalysis {
     pub reconstructed: Vec<u32>,
     pub necks: Vec<bool>,
     pub candidates: Vec<LakeCandidate>,
+    pub closed_water: ClosedWater,
+    pub source_kinds: Vec<crate::water::model::WaterKind>,
     pub options: LakeOptions,
 }
 
 impl LakeAnalysis {
     pub fn is_lake(&self, i: usize) -> bool {
+        let source = self.raster.source[i];
+        if source == raster::NONE {
+            return false;
+        }
+        if self.closed_water.forced_lake[source as usize] {
+            return true;
+        }
         let id = self.reconstructed[i];
-        id > 0 && self.candidates[(id - 1) as usize].accepted
+        id > 0 && {
+            let candidate = &self.candidates[(id - 1) as usize];
+            candidate.accepted
+                && (self.source_kinds[source as usize] == crate::water::model::WaterKind::Lake
+                    || candidate.accepts_river_water)
+        }
     }
 }
 

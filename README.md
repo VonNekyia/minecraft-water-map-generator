@@ -14,13 +14,16 @@ These samples use source water and raw mud with `--max-below-sea-level 10
 At sea level 63, water surfaces at Y=53 or above qualify, including water under
 mountains. Flowing/falling water and lower water surfaces are excluded before
 classification; merging and the 2,000-column minimum then remove small regions.
-The current export contains 5,285 regions: 148 seas, 3,677 rivers, 1,308 lakes and
-152 swamps. The lake pass accepts 1,105 geographic candidates; region IDs also
-split on inherited water attributes. Raw mud contributes to the 7.89 million
-square blocks of swamp; the desert/canyon modifier applies to 165 regions.
-The default basin-fill check keeps winding, sprawling water networks as rivers:
-lake-labelled area is 49.1% lower than in the previous refinement, with the same
-water geometry. `min_basin_fill` controls this river/lake bias.
+The current export contains 4,546 regions: 148 seas, 2,665 rivers, 1,581 lakes and
+152 swamps. Raw mud contributes to the 7.89 million square blocks of swamp;
+the desert/canyon modifier applies to 176 regions. Existing lake evidence and
+stricter criteria for new lake labels balance irregular lakes against wide rivers.
+Small retained bodies without an ocean path become lakes, up to a configurable
+100,000-block area; larger closed networks still undergo normal segmentation.
+On 18,444 manually annotated water pixels, the sample map matches 90.5% of river
+marks and 83.5% of lake marks (87.4% overall). Paint over non-water is excluded.
+This is agreement on the tuning mask, not a whole-world accuracy claim. See the
+[settings, evaluation and limitations](docs/lake-detection.md#mask-calibration).
 The earlier classifier produced 2,336 regions. The additional lake/channel cuts
 preserve exactly the same 351,359,105 retained water columns; short channels and
 attribute fragments can now be smaller than the earlier 2,000-column cleanup floor.
@@ -148,7 +151,7 @@ Options:
 | `--export-json` | also write `debug/water_regions.json` |
 | `--json-limit <n>` | export only the N largest regions to JSON |
 | `--export-map` | also write the six debug PNGs (classification, regions, depth, oceans, inland, combined) |
-| `--lake-debug` | optional lake fields, cores, cuts, flow points and candidate-confidence JSON |
+| `--lake-debug` | optional lake fields, cores, cuts, flow points, candidate JSON and exact candidate-label runs |
 | `--lake-config <file>` | JSON lake-threshold overrides; see `docs/lake-defaults.json` |
 | `--no-lake-detection` | disable the new lake pass for comparison with the earlier classifier |
 | `--map-scale <n>` | blocks per pixel in the debug maps, default 8 |

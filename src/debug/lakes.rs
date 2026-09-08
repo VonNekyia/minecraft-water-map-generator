@@ -82,6 +82,7 @@ struct Diagnostics<'a> {
     world_bounds: [i32; 4],
     inland_water_columns: u64,
     accepted_candidate_count: usize,
+    river_promotion_candidate_count: usize,
     rejected_candidate_count: usize,
     distance_metric: &'static str,
     density_windows: &'static str,
@@ -90,6 +91,9 @@ struct Diagnostics<'a> {
     flow_note: &'static str,
     options: &'a LakeOptions,
     candidates: &'a [LakeCandidate],
+    closed_water: &'a crate::water::lakes::ClosedWater,
+    source_kinds: &'a [crate::water::model::WaterKind],
+    candidate_runs_format: &'static str,
 }
 
 /// Writes candidates/options JSON and ten optional PNG layers into `dir`.
@@ -128,6 +132,7 @@ pub fn write(
         world_bounds: [bounds.0, bounds.1, bounds.2, bounds.3],
         inland_water_columns: analysis.raster.source.iter().filter(|&&s| s != u32::MAX).count() as u64,
         accepted_candidate_count: accepted,
+        river_promotion_candidate_count: analysis.candidates.iter().filter(|c| c.accepts_river_water).count(),
         rejected_candidate_count: analysis.candidates.len() - accepted,
         distance_metric: "Manhattan blocks to nearest dry cell; shore water = 1; approximate width = 2 * distance",
         density_windows: "Square windows at radii 8, 16, 32 blocks (17, 33, 65 blocks per side)",
@@ -136,11 +141,15 @@ pub fn write(
         flow_note: "Direction is inferred from water-surface head differences, not simulated flow; flat or unavailable head remains unknown",
         options: &analysis.options,
         candidates: &analysis.candidates,
+        closed_water: &analysis.closed_water,
+        source_kinds: &analysis.source_kinds,
+        candidate_runs_format: "lake_candidate_runs.bin: LKRUNS01 magic, then little-endian 20-byte records: u32 source index, u32 candidate id+1 (0 = channel), i32 z, i32 x0, i32 x1 inclusive. Original one-block water only; runs are in raster tile order.",
     };
     let mut json = BufWriter::new(std::fs::File::create(dir.join("lake_candidates.json"))?);
     serde_json::to_writer_pretty(&mut json, &metadata)?;
     json.write_all(b"\n")?;
     json.flush()?;
+    write_candidate_runs(&dir.join("lake_candidate_runs.bin"), analysis)?;
 
     let projection = Projection::new(bounds, scale)?;
     let mut values = vec![0u16; projection.w * projection.h];
@@ -149,6 +158,38 @@ pub fn write(
         let canvas = render(grid, analysis, &projection, layer, title, &values);
         canvas.write_png(&dir.join(filename))?;
     }
+    Ok(())
+}
+
+/// Optional exact labels support threshold experiments without rescanning a world.
+/// Limit each run to its raster row; tile boundaries may split otherwise equal runs.
+fn write_candidate_runs(path: &Path, analysis: &LakeAnalysis) -> anyhow::Result<()> {
+    let mut out = BufWriter::new(std::fs::File::create(path)?);
+    out.write_all(b"LKRUNS01")?;
+    let r = &analysis.raster;
+    let mut i = 0;
+    while i < r.len() {
+        let source = r.source[i];
+        if source == u32::MAX {
+            i += 1;
+            continue;
+        }
+        let candidate = analysis.reconstructed[i];
+        let (x0, z) = r.coords(i);
+        let row_end = (i / 32 + 1) * 32;
+        let start = i;
+        i += 1;
+        while i < row_end && r.source[i] == source && analysis.reconstructed[i] == candidate {
+            i += 1;
+        }
+        let x1 = x0 + (i - start) as i32 - 1;
+        out.write_all(&source.to_le_bytes())?;
+        out.write_all(&candidate.to_le_bytes())?;
+        out.write_all(&z.to_le_bytes())?;
+        out.write_all(&x0.to_le_bytes())?;
+        out.write_all(&x1.to_le_bytes())?;
+    }
+    out.flush()?;
     Ok(())
 }
 
@@ -225,7 +266,11 @@ fn reduce(analysis: &LakeAnalysis, projection: &Projection, layer: Layer, values
                     analysis.cores[i]
                 };
                 1 + u16::from(
-                    candidate > 0 && !analysis.candidates[(candidate - 1) as usize].accepted,
+                    candidate > 0 && !analysis.is_lake(i)
+                        && {
+                            let c = &analysis.candidates[(candidate - 1) as usize];
+                            !c.accepted || (analysis.source_kinds[source as usize] == crate::water::model::WaterKind::River && !c.accepts_river_water)
+                        },
                 )
             }
         };
@@ -490,6 +535,8 @@ mod tests {
         let raster = Raster::from_regions(&[region]);
         let n = raster.len();
         let mut analysis = LakeAnalysis {
+            closed_water: crate::water::lakes::ClosedWater { forced_lake: vec![false], ..Default::default() },
+            source_kinds: vec![WaterKind::River],
             raster,
             distance: vec![0; n],
             density: vec![[0; 3]; n],
@@ -500,6 +547,7 @@ mod tests {
                 LakeCandidate {
                     id: 0,
                     accepted: true,
+                    accepts_river_water: true,
                     confidence: 0.9,
                     connections: vec![Connection {
                         x: -1,
@@ -597,6 +645,28 @@ mod tests {
         assert_eq!(json["analysis_blocks_per_cell"], 1);
         assert_eq!(json["render_blocks_per_pixel"], 8);
         assert_eq!(json["accepted_candidate_count"], 1);
+        let data = std::fs::read(dir.join("lake_candidate_runs.bin")).unwrap();
+        assert_eq!(&data[..8], b"LKRUNS01");
+        assert_eq!((data.len() - 8) % 20, 0);
+        let mut decoded = std::collections::BTreeMap::new();
+        for record in data[8..].chunks_exact(20) {
+            let source = u32::from_le_bytes(record[0..4].try_into().unwrap());
+            let candidate = u32::from_le_bytes(record[4..8].try_into().unwrap());
+            let z = i32::from_le_bytes(record[8..12].try_into().unwrap());
+            let x0 = i32::from_le_bytes(record[12..16].try_into().unwrap());
+            let x1 = i32::from_le_bytes(record[16..20].try_into().unwrap());
+            assert!(x0 <= x1);
+            for x in x0..=x1 {
+                assert!(decoded.insert((x, z), (source, candidate)).is_none());
+            }
+        }
+        assert_eq!(decoded.len(), 16, "export must exclude dry cells and retain all water");
+        for z in -1..=0 {
+            for x in -4..=3 {
+                let candidate = match (x, z) { (-1, -1) => 1, (0, -1) => 2, _ => 0 };
+                assert_eq!(decoded[&(x, z)], (0, candidate));
+            }
+        }
         assert_eq!(
             json["candidates"][0]["connections"][0]["direction"],
             "unknown"

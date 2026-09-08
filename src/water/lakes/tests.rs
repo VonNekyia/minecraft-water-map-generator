@@ -114,7 +114,24 @@ fn run_analysis(
     (analysis, output)
 }
 
+/// The synthetic channels stop at fixture borders and do not model their full
+/// route to the ocean. Isolate core/neck segmentation from the closed-body rule.
+fn segmentation_options() -> LakeOptions {
+    LakeOptions {
+        max_closed_lake_area: 0,
+        ..LakeOptions::default()
+    }
+}
+
 fn detect(region: WaterRegion) -> (LakeAnalysis, Vec<WaterRegion>) {
+    run_analysis(
+        &WorldGrid::build(Vec::new()),
+        vec![region],
+        &segmentation_options(),
+    )
+}
+
+fn detect_closed(region: WaterRegion) -> (LakeAnalysis, Vec<WaterRegion>) {
     run_analysis(
         &WorldGrid::build(Vec::new()),
         vec![region],
@@ -176,6 +193,48 @@ fn terrain_grid(bounds: [i32; 4], height: i16) -> WorldGrid {
         }
     }
     WorldGrid::build(regions.into_values().collect())
+}
+
+#[test]
+fn default_closed_pool_override_keeps_the_exact_small_water_outline() {
+    let pool = rectangle([-50, -10, 49, 9]);
+    let (analysis, output) = run_analysis(
+        &WorldGrid::build(Vec::new()),
+        vec![pool],
+        &LakeOptions::default(),
+    );
+    assert!(analysis
+        .candidates
+        .iter()
+        .all(|candidate| !candidate.accepted));
+    assert_eq!(analysis.closed_water.forced_area, 2000);
+    assert!(output.iter().all(|region| region.kind == WaterKind::Lake));
+    assert_kind(&output, &[(-50, -10), (49, 9), (0, 0)], WaterKind::Lake);
+}
+
+#[test]
+fn default_closed_pool_override_keeps_a_small_sea_connected_channel_as_river() {
+    let river = rectangle([-50, -10, 49, 9]);
+    let mut sea = rectangle([50, -10, 69, 9]);
+    sea.kind = WaterKind::Sea;
+    let sea_runs = sea.geometry.runs.clone();
+    let (analysis, output) = run_analysis(
+        &WorldGrid::build(Vec::new()),
+        vec![river, sea],
+        &LakeOptions::default(),
+    );
+    assert_eq!(analysis.closed_water.forced_area, 0);
+    assert_kind(&output, &[(-50, -10), (49, 9), (0, 0)], WaterKind::River);
+    assert_kind(&output, &[(50, -10), (69, 9)], WaterKind::Sea);
+    assert_eq!(
+        output
+            .iter()
+            .find(|region| region.kind == WaterKind::Sea)
+            .unwrap()
+            .geometry
+            .runs,
+        sea_runs
+    );
 }
 
 #[test]
@@ -243,7 +302,7 @@ fn diagonal_channels_are_cut_at_the_lake_mouth_not_at_a_medial_step() {
 
 #[test]
 fn irregular_bays_islands_and_peninsulas_keep_their_exact_shoreline() {
-    let (analysis, output) = detect(shape([-90, -78, 80, 48], |x, z| {
+    let (analysis, output) = detect_closed(shape([-90, -78, 80, 48], |x, z| {
         let body = (-64..=64).contains(&x) && (-48..=48).contains(&z);
         let west_bay = (-90..=-65).contains(&x) && (-18..=18).contains(&z);
         let north_bay = (-25..=20).contains(&x) && (-78..=-49).contains(&z);
@@ -326,10 +385,12 @@ fn a_wide_winding_channel_is_not_a_lake_despite_a_large_core() {
     assert!(analysis
         .candidates
         .iter()
-        .any(|c| c.rejection.as_deref() == Some("channel_like_footprint")));
+        .any(|c| c.river_rejection.as_deref() == Some("new_lake_footprint")));
     let options = LakeOptions {
         min_basin_fill: 0.0,
-        ..LakeOptions::default()
+        min_new_lake_fill: 0.0,
+        min_new_lake_core_fraction: 0.0,
+        ..segmentation_options()
     };
     let (_, previous) = run_analysis(&WorldGrid::build(Vec::new()), vec![region], &options);
     assert!(
@@ -340,7 +401,7 @@ fn a_wide_winding_channel_is_not_a_lake_despite_a_large_core() {
 
 #[test]
 fn a_closed_elongated_lake_remains_lake_when_rotated_diagonally() {
-    let (analysis, output) = detect(shape([-120, -120, 120, 120], |x, z| {
+    let (analysis, output) = detect_closed(shape([-120, -120, 120, 120], |x, z| {
         let along = i64::from(x + z);
         let across = i64::from(x - z);
         along * along * 28 * 28 + across * across * 160 * 160 <= 2 * 160 * 160 * 28 * 28
@@ -359,6 +420,24 @@ fn a_closed_elongated_lake_remains_lake_when_rotated_diagonally() {
         &[(0, 0), (-100, -100), (100, 100), (15, -15)],
         WaterKind::Lake,
     );
+}
+
+#[test]
+fn existing_lake_evidence_and_new_river_promotions_use_separate_gates() {
+    let mut region = shape([-300, -198, 300, 198], |x, z| {
+        let center = (150.0 * (x as f64 / 100.0).sin()).round() as i32;
+        (z - center).abs() <= 48
+    });
+    let (_, rivers) = detect(region.clone());
+    assert!(rivers.iter().all(|r| r.kind == WaterKind::River));
+    region.kind = WaterKind::Lake;
+    let (analysis, lakes) = detect(region);
+    assert!(analysis
+        .candidates
+        .iter()
+        .any(|c| c.accepted && !c.accepts_river_water));
+    assert!(lakes.iter().any(|r| r.kind == WaterKind::Lake));
+    assert_eq!(canonical_mask(&rivers), canonical_mask(&lakes));
 }
 
 #[test]
@@ -411,7 +490,7 @@ fn several_raised_inflows_and_one_lower_outlet_have_high_plausibility() {
             62 + rise
         }
     });
-    let (analysis, output) = run_analysis(&grid, vec![region], &LakeOptions::default());
+    let (analysis, output) = run_analysis(&grid, vec![region], &segmentation_options());
     assert_kind(&output, &[(0, 0)], WaterKind::Lake);
     assert_kind(
         &output,
@@ -441,7 +520,7 @@ fn abrupt_channel_height_steps_are_compared_with_the_lake_side() {
     let (analysis, output) = run_analysis(
         &WorldGrid::build(Vec::new()),
         regions,
-        &LakeOptions::default(),
+        &segmentation_options(),
     );
     assert_kind(&output, &[(0, 0)], WaterKind::Lake);
     assert_kind(
@@ -522,7 +601,7 @@ fn tiny_pool_requires_explicit_small_lake_configuration() {
         density_32: 0.01,
         min_core_area: 4,
         min_lake_area: 32,
-        ..LakeOptions::default()
+        ..segmentation_options()
     };
     let (_, configured) = run_analysis(&WorldGrid::build(Vec::new()), vec![pool], &options);
     assert!(configured.iter().all(|r| r.kind == WaterKind::Lake));
@@ -551,7 +630,7 @@ fn lake_application_preserves_protected_regions_and_all_water_attributes() {
     let (_, output) = run_analysis(
         &WorldGrid::build(Vec::new()),
         vec![lake, sea, swamp, cave],
-        &LakeOptions::default(),
+        &segmentation_options(),
     );
     for mut before in protected {
         let mut after = output
@@ -577,8 +656,8 @@ fn terrain_changes_confidence_without_rejecting_an_unusual_closed_basin() {
     let lake = rectangle([-50, -50, 50, 50]);
     let high = terrain_grid([-55, -55, 55, 55], 70);
     let low = terrain_grid([-55, -55, 55, 55], 61);
-    let (high_analysis, _) = run_analysis(&high, vec![lake.clone()], &LakeOptions::default());
-    let (low_analysis, _) = run_analysis(&low, vec![lake], &LakeOptions::default());
+    let (high_analysis, _) = run_analysis(&high, vec![lake.clone()], &segmentation_options());
+    let (low_analysis, _) = run_analysis(&low, vec![lake], &segmentation_options());
     let high_lake = high_analysis
         .candidates
         .iter()
@@ -611,6 +690,9 @@ fn lake_configuration_supports_partial_overrides_and_rejects_invalid_thresholds(
         r#"{"connection_sample_distance":257}"#,
         r#"{"min_core_area":0}"#,
         r#"{"min_basin_fill":1.1}"#,
+        r#"{"min_new_lake_fill":-0.1}"#,
+        r#"{"min_new_lake_core_fraction":1.1}"#,
+        r#"{"new_lake_compact_fill":1.1}"#,
     ] {
         let options: LakeOptions = serde_json::from_str(json).unwrap();
         assert!(
@@ -648,7 +730,7 @@ fn export_synthetic_lake_diagnostics() {
         ("diagonal", diagonal),
         ("linked", linked),
     ] {
-        let (analysis, _) = run_analysis(&grid, vec![region], &LakeOptions::default());
+        let (analysis, _) = run_analysis(&grid, vec![region], &segmentation_options());
         assert!(analysis
             .candidates
             .iter()
@@ -659,7 +741,8 @@ fn export_synthetic_lake_diagnostics() {
         let center = (150.0 * (x as f64 / 100.0).sin()).round() as i32;
         (z - center).abs() <= 48
     });
-    let (analysis, _) = run_analysis(&grid, vec![winding], &LakeOptions::default());
-    assert!(analysis.candidates.iter().all(|c| !c.accepted));
+    let (analysis, _) = run_analysis(&grid, vec![winding], &segmentation_options());
+    assert!(analysis.candidates.iter().all(|c| !c.accepts_river_water));
+    assert!((0..analysis.raster.len()).all(|i| !analysis.is_lake(i)));
     crate::debug::lakes::write(&directory.join("winding-river"), &grid, &analysis, 1).unwrap();
 }

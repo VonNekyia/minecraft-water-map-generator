@@ -68,6 +68,12 @@ pub fn analyze(grid: &WorldGrid, regions: &[WaterRegion], options: &LakeOptions)
         options,
     );
     LakeAnalysis {
+        closed_water: super::closed::classify(
+            regions,
+            options.min_lake_area,
+            options.max_closed_lake_area,
+        ),
+        source_kinds: regions.iter().map(|r| r.kind).collect(),
         raster,
         distance,
         density,
@@ -704,6 +710,19 @@ fn score_candidates(
             c.rejection = Some("low_confidence".into());
         }
         c.accepted = c.rejection.is_none();
+        c.core_fraction = c.core_area as f32 / area;
+        c.river_rejection = if !c.accepted {
+            c.rejection.clone()
+        } else if c.basin_fill_ratio < opts.min_new_lake_fill {
+            Some("new_lake_footprint".into())
+        } else if c.core_fraction < opts.min_new_lake_core_fraction
+            && c.basin_fill_ratio < opts.new_lake_compact_fill
+        {
+            Some("new_lake_core_support".into())
+        } else {
+            None
+        };
+        c.accepts_river_water = c.accepted && c.river_rejection.is_none();
     }
 }
 
