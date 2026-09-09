@@ -27,8 +27,18 @@ pub struct LakeOptions {
     pub min_lake_area: u32,
     /// Whole retained water bodies without an ocean path, zero disables.
     pub max_closed_lake_area: u32,
+    /// Very small isolated pools need no broad core or width evidence.
+    pub max_small_closed_lake_area: u32,
+    pub min_closed_lake_fill: f32,
+    pub max_closed_lake_elongation: f32,
+    pub min_closed_lake_mean_width: f32,
     /// Minimum water occupancy of the candidate's axis/PCA-oriented footprint.
     pub min_basin_fill: f32,
+    /// Minimum broad-core share of every candidate, regardless of its old label.
+    pub min_basin_core_fraction: f32,
+    /// Small compact basins can have little core after removing the bank band.
+    pub max_compact_lake_area: u32,
+    pub min_compact_lake_fill: f32,
     /// Stronger evidence required to turn previously classified river into lake.
     pub min_new_lake_fill: f32,
     pub min_new_lake_core_fraction: f32,
@@ -53,10 +63,17 @@ impl Default for LakeOptions {
             density_32: 0.80,
             min_core_area: 64,
             min_lake_area: 2000,
-            max_closed_lake_area: 100000,
+            max_closed_lake_area: 500000,
+            max_small_closed_lake_area: 5000,
+            min_closed_lake_fill: 0.30,
+            max_closed_lake_elongation: 5.0,
+            min_closed_lake_mean_width: 0.0,
             min_basin_fill: 0.25,
-            min_new_lake_fill: 0.50,
-            min_new_lake_core_fraction: 0.40,
+            min_basin_core_fraction: 0.60,
+            max_compact_lake_area: 20000,
+            min_compact_lake_fill: 0.75,
+            min_new_lake_fill: 0.0,
+            min_new_lake_core_fraction: 0.0,
             new_lake_compact_fill: 0.75,
             neck_width_ratio: 0.55,
             river_seed_distance_factor: 2.0,
@@ -82,6 +99,9 @@ impl LakeOptions {
             ("density_32", self.density_32),
             ("min_confidence", self.min_confidence),
             ("min_basin_fill", self.min_basin_fill),
+            ("min_closed_lake_fill", self.min_closed_lake_fill),
+            ("min_basin_core_fraction", self.min_basin_core_fraction),
+            ("min_compact_lake_fill", self.min_compact_lake_fill),
             ("min_new_lake_fill", self.min_new_lake_fill),
             (
                 "min_new_lake_core_fraction",
@@ -107,6 +127,14 @@ impl LakeOptions {
         anyhow::ensure!(
             self.max_channel_elongation.is_finite() && self.max_channel_elongation >= 1.0,
             "max_channel_elongation must be finite and at least 1"
+        );
+        anyhow::ensure!(
+            self.max_closed_lake_elongation.is_finite() && self.max_closed_lake_elongation >= 1.0,
+            "max_closed_lake_elongation must be finite and at least 1"
+        );
+        anyhow::ensure!(
+            self.min_closed_lake_mean_width.is_finite() && self.min_closed_lake_mean_width >= 0.0,
+            "min_closed_lake_mean_width must be finite and nonnegative"
         );
         anyhow::ensure!(
             self.flow_head_difference.is_finite() && self.flow_head_difference > 0.0,

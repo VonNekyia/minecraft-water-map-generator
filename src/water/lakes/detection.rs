@@ -68,11 +68,7 @@ pub fn analyze(grid: &WorldGrid, regions: &[WaterRegion], options: &LakeOptions)
         options,
     );
     LakeAnalysis {
-        closed_water: super::closed::classify(
-            regions,
-            options.min_lake_area,
-            options.max_closed_lake_area,
-        ),
+        closed_water: super::closed::classify(regions, options),
         source_kinds: regions.iter().map(|r| r.kind).collect(),
         raster,
         distance,
@@ -700,17 +696,24 @@ fn score_candidates(
             + 0.10 * c.terrain_basin_score
             + 0.05 * c.flow_score)
             .clamp(0.0, 1.0);
+        c.core_fraction = c.core_area as f32 / area;
+        // Removing a fixed bank band consumes most of a small round or narrow
+        // elliptical lake. Its compact footprint supplies the missing support;
+        // this bounded exception cannot admit an arbitrarily long wide river.
+        let compact_small_basin = c.area <= opts.max_compact_lake_area
+            && c.basin_fill_ratio >= opts.min_compact_lake_fill;
         if c.area < opts.min_lake_area {
             c.rejection = Some("candidate_too_small".into());
         } else if c.basin_fill_ratio < opts.min_basin_fill {
             c.rejection = Some("channel_like_footprint".into());
+        } else if c.core_fraction < opts.min_basin_core_fraction && !compact_small_basin {
+            c.rejection = Some("insufficient_basin_core".into());
         } else if c.channel_elongation > opts.max_channel_elongation && !opposed_necks(c) {
             c.rejection = Some("uniform_wide_channel".into());
         } else if c.confidence < opts.min_confidence {
             c.rejection = Some("low_confidence".into());
         }
         c.accepted = c.rejection.is_none();
-        c.core_fraction = c.core_area as f32 / area;
         c.river_rejection = if !c.accepted {
             c.rejection.clone()
         } else if c.basin_fill_ratio < opts.min_new_lake_fill {

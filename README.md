@@ -14,14 +14,16 @@ These samples use source water and raw mud with `--max-below-sea-level 10
 At sea level 63, water surfaces at Y=53 or above qualify, including water under
 mountains. Flowing/falling water and lower water surfaces are excluded before
 classification; merging and the 2,000-column minimum then remove small regions.
-The current export contains 4,546 regions: 148 seas, 2,665 rivers, 1,581 lakes and
+The current export contains 2,550 regions: 148 seas, 1,304 rivers, 946 lakes and
 152 swamps. Raw mud contributes to the 7.89 million square blocks of swamp;
-the desert/canyon modifier applies to 176 regions. Existing lake evidence and
-stricter criteria for new lake labels balance irregular lakes against wide rivers.
-Small retained bodies without an ocean path become lakes, up to a configurable
-100,000-block area; larger closed networks still undergo normal segmentation.
-On 18,444 manually annotated water pixels, the sample map matches 90.5% of river
-marks and 83.5% of lake marks (87.4% overall). Paint over non-water is excluded.
+the desert/canyon modifier applies to 101 regions. Broad-core support separates
+lake basins from wide rivers, with a compactness exception for small lakes.
+Retained bodies without an ocean path become lakes up to 5,000 blocks; larger
+closed bodies up to 500,000 blocks also require a compact, non-channel-like shape.
+On 498,875 manually annotated water pixels, the sample map matches 90.47% of river
+marks and 91.22% of lake marks (90.75% overall, up from 82.74% on the same mask).
+Both class recalls exceed 90%; the requested 95% overall target is not yet met.
+Paint over non-water, oceans and swamps is excluded.
 This is agreement on the tuning mask, not a whole-world accuracy claim. See the
 [settings, evaluation and limitations](docs/lake-detection.md#mask-calibration).
 The earlier classifier produced 2,336 regions. The additional lake/channel cuts
@@ -566,8 +568,10 @@ not, and the data says so.
 
 The final inland pass finds broad lake interiors from shore distance and local
 water density, separates narrower river connections, and reconstructs the lake
-using the retained Minecraft water mask. A rotation-aware footprint check rejects
-winding river candidates while allowing elongated diagonal lakes. It adds terrain and water-head evidence
+using the retained Minecraft water mask. Core-area share and a rotation-aware
+footprint check reject winding river candidates while allowing compact small
+lakes. Whole-body shape also prevents disconnected meanders from being labelled
+as lakes solely because they have no ocean path. It adds terrain and water-head evidence
 to a configurable confidence score. Oceans, swamps and cave-classified regions
 keep their existing geometry and attributes.
 

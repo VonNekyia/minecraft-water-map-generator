@@ -311,7 +311,11 @@ fn irregular_bays_islands_and_peninsulas_keep_their_exact_shoreline() {
         let peninsula = x >= 25 && z <= -20;
         (body || west_bay || north_bay || east_bay) && !island && !peninsula
     }));
-    assert!(analysis.candidates.iter().any(|c| c.accepted));
+    assert!(
+        analysis.candidates.iter().any(|c| c.accepted)
+            || analysis.closed_water.forced_component_count == 1,
+        "an irregular basin may qualify through its whole closed-body shape"
+    );
     assert!(
         output.iter().all(|r| r.kind == WaterKind::Lake),
         "short bays must be reconstructed as part of the lake"
@@ -385,9 +389,10 @@ fn a_wide_winding_channel_is_not_a_lake_despite_a_large_core() {
     assert!(analysis
         .candidates
         .iter()
-        .any(|c| c.river_rejection.as_deref() == Some("new_lake_footprint")));
+        .any(|c| c.rejection.as_deref() == Some("insufficient_basin_core")));
     let options = LakeOptions {
         min_basin_fill: 0.0,
+        min_basin_core_fraction: 0.0,
         min_new_lake_fill: 0.0,
         min_new_lake_core_fraction: 0.0,
         ..segmentation_options()
@@ -423,7 +428,7 @@ fn a_closed_elongated_lake_remains_lake_when_rotated_diagonally() {
 }
 
 #[test]
-fn existing_lake_evidence_and_new_river_promotions_use_separate_gates() {
+fn default_core_support_corrects_winding_channels_with_either_original_label() {
     let mut region = shape([-300, -198, 300, 198], |x, z| {
         let center = (150.0 * (x as f64 / 100.0).sin()).round() as i32;
         (z - center).abs() <= 48
@@ -431,7 +436,22 @@ fn existing_lake_evidence_and_new_river_promotions_use_separate_gates() {
     let (_, rivers) = detect(region.clone());
     assert!(rivers.iter().all(|r| r.kind == WaterKind::River));
     region.kind = WaterKind::Lake;
-    let (analysis, lakes) = detect(region);
+    let (_, corrected) = detect(region.clone());
+    assert!(corrected.iter().all(|r| r.kind == WaterKind::River));
+    assert_eq!(canonical_mask(&rivers), canonical_mask(&corrected));
+
+    // The previous source-dependent policy remains explicitly configurable.
+    let historical_options = LakeOptions {
+        min_basin_core_fraction: 0.0,
+        min_new_lake_fill: 0.50,
+        min_new_lake_core_fraction: 0.40,
+        ..segmentation_options()
+    };
+    let (analysis, lakes) = run_analysis(
+        &WorldGrid::build(Vec::new()),
+        vec![region],
+        &historical_options,
+    );
     assert!(analysis
         .candidates
         .iter()
@@ -690,6 +710,11 @@ fn lake_configuration_supports_partial_overrides_and_rejects_invalid_thresholds(
         r#"{"connection_sample_distance":257}"#,
         r#"{"min_core_area":0}"#,
         r#"{"min_basin_fill":1.1}"#,
+        r#"{"min_basin_core_fraction":-0.1}"#,
+        r#"{"min_compact_lake_fill":1.1}"#,
+        r#"{"min_closed_lake_fill":-0.1}"#,
+        r#"{"max_closed_lake_elongation":0.5}"#,
+        r#"{"min_closed_lake_mean_width":-1}"#,
         r#"{"min_new_lake_fill":-0.1}"#,
         r#"{"min_new_lake_core_fraction":1.1}"#,
         r#"{"new_lake_compact_fill":1.1}"#,

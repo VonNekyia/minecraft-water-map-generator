@@ -484,6 +484,29 @@ mod tests {
     }
 
     #[test]
+    fn every_vanilla_ocean_biome_maps_to_an_existing_ocean_category() {
+        let expected = [
+            ("minecraft:ocean", Temperature::Medium),
+            ("minecraft:deep_ocean", Temperature::Medium),
+            ("minecraft:warm_ocean", Temperature::Warm),
+            ("minecraft:lukewarm_ocean", Temperature::Warm),
+            ("minecraft:deep_lukewarm_ocean", Temperature::Warm),
+            ("minecraft:cold_ocean", Temperature::Cold),
+            ("minecraft:deep_cold_ocean", Temperature::Cold),
+            ("minecraft:frozen_ocean", Temperature::Cold),
+            ("minecraft:deep_frozen_ocean", Temperature::Cold),
+        ];
+        for (name, temperature) in expected {
+            let info = BiomeInfo::derive(name, 0.5, 0.5);
+            assert_eq!(info.family, BiomeFamily::Ocean, "{name}");
+            assert_eq!(info.water_temperature, temperature, "{name}");
+        }
+        let terralith = BiomeInfo::derive("terralith:deep_warm_ocean", 0.5, 0.5);
+        assert_eq!(terralith.family, BiomeFamily::Ocean);
+        assert_eq!(terralith.water_temperature, Temperature::Warm);
+    }
+
+    #[test]
     fn families_are_derived_from_names() {
         assert_eq!(
             BiomeInfo::derive("minecraft:river", 0.5, 0.5).family,

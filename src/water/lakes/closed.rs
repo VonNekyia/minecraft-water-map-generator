@@ -12,6 +12,8 @@ use crate::water::absorb;
 use crate::water::components::UnionFind;
 use crate::water::model::{Modifiers, WaterKind, WaterRegion};
 
+use super::LakeOptions;
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ClosedComponent {
     /// Dense component id, independent of the externally assigned region ids.
@@ -23,6 +25,12 @@ pub struct ClosedComponent {
     pub inland_area: u64,
     pub river_area: u64,
     pub reaches_sea: bool,
+    /// Fraction of the smaller axis-aligned/PCA box occupied by the whole body.
+    pub fill_ratio: f32,
+    /// Long / short side of the PCA box, including complete water blocks.
+    pub elongation: f32,
+    /// Whole-body area / long side of the PCA box, in blocks.
+    pub mean_width: f32,
     /// Whether this body's River/Lake members receive the bounded lake override.
     pub forced_lake: bool,
 }
@@ -44,11 +52,12 @@ pub struct ClosedWater {
     pub reclassified_river_area: u64,
 }
 
-/// Mark River/Lake regions in sea-disconnected physical bodies with total area
-/// in the inclusive range min_area..=max_area. Swamp area counts toward the body
-/// size but its label stays protected. A zero maximum disables all work; an
-/// inverted range similarly matches no body. This function never mutates input.
-pub fn classify(regions: &[WaterRegion], min_area: u32, max_area: u32) -> ClosedWater {
+/// Mark small closed pools, plus larger closed bodies with a lake-like footprint.
+/// Swamp area counts toward the complete body's size/shape but its label remains
+/// protected. No water geometry or source region is changed by this analysis.
+pub fn classify(regions: &[WaterRegion], options: &LakeOptions) -> ClosedWater {
+    let min_area = options.min_lake_area;
+    let max_area = options.max_closed_lake_area;
     let mut result = ClosedWater {
         forced_lake: vec![false; regions.len()],
         component_by_region: vec![None; regions.len()],
@@ -92,6 +101,9 @@ pub fn classify(regions: &[WaterRegion], min_area: u32, max_area: u32) -> Closed
                 inland_area: 0,
                 river_area: 0,
                 reaches_sea: false,
+                fill_ratio: 0.0,
+                elongation: 0.0,
+                mean_width: 0.0,
                 forced_lake: false,
             });
             id
@@ -115,10 +127,16 @@ pub fn classify(regions: &[WaterRegion], min_area: u32, max_area: u32) -> Closed
         }
     }
 
+    measure_shapes(regions, &mut result);
     for component in &mut result.components {
+        let small_pool = component.area <= options.max_small_closed_lake_area as u64;
+        let lake_shape = component.fill_ratio >= options.min_closed_lake_fill
+            && component.elongation <= options.max_closed_lake_elongation
+            && component.mean_width >= options.min_closed_lake_mean_width;
         component.forced_lake = !component.reaches_sea
             && component.inland_area > 0
-            && (min_area as u64..=max_area as u64).contains(&component.area);
+            && (min_area as u64..=max_area as u64).contains(&component.area)
+            && (small_pool || lake_shape);
         if component.forced_lake {
             result.forced_component_count += 1;
             result.forced_area += component.inland_area;
@@ -137,10 +155,112 @@ pub fn classify(regions: &[WaterRegion], min_area: u32, max_area: u32) -> Closed
     result
 }
 
+/// Accumulate exact block-center moments analytically over runs, then project
+/// their endpoints onto the principal axes. This uses O(bodies) additional
+/// memory and O(runs) work, rather than visiting each water block individually.
+/// Anchoring at each body's bounds avoids large-world-coordinate cancellation.
+fn measure_shapes(regions: &[WaterRegion], result: &mut ClosedWater) {
+    let n = result.components.len();
+    let mut moments = vec![[0.0_f64; 5]; n];
+    for (source, region) in regions.iter().enumerate() {
+        let Some(id) = result.component_by_region[source] else {
+            continue;
+        };
+        let c = &result.components[id as usize];
+        if c.reaches_sea || c.area == 0 {
+            continue;
+        }
+        let sums = &mut moments[id as usize];
+        for run in &region.geometry.runs {
+            let x0 = (run.x0 as i64 - c.bounds[0] as i64) as f64;
+            let x1 = (run.x1 as i64 - c.bounds[0] as i64) as f64;
+            let z = (run.z as i64 - c.bounds[1] as i64) as f64;
+            let length = x1 - x0 + 1.0;
+            let center_x = (x0 + x1) * 0.5;
+            sums[0] += length * center_x;
+            sums[1] += length * z;
+            sums[2] += length * (center_x * center_x + (length * length - 1.0) / 12.0);
+            sums[3] += length * z * z;
+            sums[4] += length * center_x * z;
+        }
+    }
+    let mut axes = vec![(1.0_f64, 0.0_f64); n];
+    for (i, c) in result.components.iter().enumerate() {
+        if c.reaches_sea || c.area == 0 {
+            continue;
+        }
+        let area = c.area as f64;
+        let m = moments[i];
+        let mx = m[0] / area;
+        let mz = m[1] / area;
+        let vx = m[2] / area - mx * mx;
+        let vz = m[3] / area - mz * mz;
+        let covariance = m[4] / area - mx * mz;
+        let angle = 0.5 * (2.0 * covariance).atan2(vx - vz);
+        axes[i] = (angle.cos(), angle.sin());
+    }
+    let mut low = vec![[f64::INFINITY; 2]; n];
+    let mut high = vec![[f64::NEG_INFINITY; 2]; n];
+    for (source, region) in regions.iter().enumerate() {
+        let Some(id) = result.component_by_region[source] else {
+            continue;
+        };
+        let i = id as usize;
+        let c = &result.components[i];
+        if c.reaches_sea || c.area == 0 {
+            continue;
+        }
+        let (cosine, sine) = axes[i];
+        for run in &region.geometry.runs {
+            let z = (run.z as i64 - c.bounds[1] as i64) as f64;
+            for x in [run.x0, run.x1] {
+                let x = (x as i64 - c.bounds[0] as i64) as f64;
+                let projected = [cosine * x + sine * z, -sine * x + cosine * z];
+                for axis in 0..2 {
+                    low[i][axis] = low[i][axis].min(projected[axis]);
+                    high[i][axis] = high[i][axis].max(projected[axis]);
+                }
+            }
+        }
+    }
+    for (i, c) in result.components.iter_mut().enumerate() {
+        if c.reaches_sea || c.area == 0 {
+            continue;
+        }
+        let (cosine, sine) = axes[i];
+        let block_span = cosine.abs() + sine.abs();
+        let u = high[i][0] - low[i][0] + block_span;
+        let v = high[i][1] - low[i][1] + block_span;
+        let axis_width = (c.bounds[2] as i64 - c.bounds[0] as i64 + 1) as f64;
+        let axis_height = (c.bounds[3] as i64 - c.bounds[1] as i64 + 1) as f64;
+        let bounding_area = (axis_width * axis_height).min(u * v);
+        c.fill_ratio = (c.area as f64 / bounding_area).clamp(0.0, 1.0) as f32;
+        c.elongation = (u.max(v) / u.min(v)) as f32;
+        c.mean_width = (c.area as f64 / u.max(v)) as f32;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::water::model::{Bathymetry, Depth, RegionGeometry, Run, Temperature, Vegetation};
+
+    // Keep the existing topology/area tests focused on those invariants. New
+    // tests below exercise the actual shape defaults and small-pool exception.
+    fn classify(regions: &[WaterRegion], min_area: u32, max_area: u32) -> ClosedWater {
+        super::classify(
+            regions,
+            &LakeOptions {
+                min_lake_area: min_area,
+                max_closed_lake_area: max_area,
+                max_small_closed_lake_area: max_area,
+                min_closed_lake_fill: 0.0,
+                max_closed_lake_elongation: f32::MAX,
+                min_closed_lake_mean_width: 0.0,
+                ..LakeOptions::default()
+            },
+        )
+    }
 
     fn rect(kind: WaterKind, x: i32, z: i32, w: i32, h: i32) -> WaterRegion {
         WaterRegion {
@@ -298,5 +418,124 @@ mod tests {
         let result = classify(&regions, 1, u32::MAX);
         assert_eq!(result.components[0].area, 8_000_000_000);
         assert_eq!(result.forced_lake, [false, false]);
+    }
+
+    #[test]
+    fn defaults_preserve_tiny_closed_pools_without_wide_cores() {
+        let regions = [
+            rect(WaterKind::River, 0, 0, 200, 10),
+            rect(WaterKind::River, 300, 0, 20, 20),
+        ];
+        let result = super::classify(&regions, &LakeOptions::default());
+        assert_eq!(result.forced_lake, [true, false]);
+        assert_eq!(result.components[0].area, 2000);
+        assert!((result.components[0].mean_width - 10.0).abs() < 0.001);
+        assert!(
+            result.components[0].elongation > LakeOptions::default().max_closed_lake_elongation
+        );
+    }
+
+    #[test]
+    fn larger_closed_meanders_and_long_channels_need_a_lake_shape() {
+        let regions = [
+            // A connected U-shaped channel with a mostly empty bounding box.
+            rect(WaterKind::River, 0, 0, 500, 20),
+            rect(WaterKind::River, 0, 20, 20, 380),
+            rect(WaterKind::River, 480, 20, 20, 380),
+            // A straight narrow channel has full occupancy but high elongation.
+            rect(WaterKind::River, 1000, 0, 1000, 30),
+            rect(WaterKind::River, 3000, 0, 100, 100),
+        ];
+        let result = super::classify(&regions, &LakeOptions::default());
+        assert_eq!(result.forced_lake, [false, false, false, false, true]);
+        let u = &result.components[result.component_by_region[0].unwrap() as usize];
+        assert_eq!(u.region_count, 3);
+        assert!(u.fill_ratio < 0.15);
+        let straight = &result.components[result.component_by_region[3].unwrap() as usize];
+        assert!(straight.fill_ratio > 0.99);
+        assert!(straight.elongation > 30.0);
+    }
+
+    #[test]
+    fn shape_uses_complete_body_across_attribute_seams() {
+        let mut regions: Vec<_> = (0..10)
+            .map(|i| rect(WaterKind::River, i * 10, 0, 10, 100))
+            .collect();
+        regions[4].temperature = Temperature::Cold;
+        regions[5].modifiers = Modifiers::ICE;
+        regions[6].kind = WaterKind::Swamp;
+        let result = super::classify(&regions, &LakeOptions::default());
+        assert_eq!(result.components.len(), 1);
+        assert!((result.components[0].fill_ratio - 1.0).abs() < 0.001);
+        assert!((result.components[0].elongation - 1.0).abs() < 0.001);
+        assert_eq!(result.forced_region_count, 9);
+        assert!(!result.forced_lake[6]);
+    }
+
+    #[test]
+    fn diagonal_elliptical_lake_uses_a_rotated_footprint() {
+        let mut lake = rect(WaterKind::River, -200, -200, 400, 400);
+        let mut runs = Vec::new();
+        let sine = std::f64::consts::FRAC_1_SQRT_2;
+        for z in -200..200 {
+            let mut row = None;
+            for x in -200..200 {
+                let u = (x + z) as f64 * sine;
+                let v = (z - x) as f64 * sine;
+                if (u / 180.0).powi(2) + (v / 50.0).powi(2) <= 1.0 {
+                    let (first, last) = row.get_or_insert((x, x));
+                    *first = (*first).min(x);
+                    *last = x;
+                }
+            }
+            if let Some((x0, x1)) = row {
+                runs.push(Run { z, x0, x1 });
+            }
+        }
+        lake.geometry.min_x = runs.iter().map(|r| r.x0).min().unwrap();
+        lake.geometry.max_x = runs.iter().map(|r| r.x1).max().unwrap();
+        lake.geometry.min_z = runs.first().unwrap().z;
+        lake.geometry.max_z = runs.last().unwrap().z;
+        lake.geometry.column_count = runs.iter().map(|r| (r.x1 - r.x0 + 1) as u32).sum();
+        lake.geometry.runs = runs;
+        let options = LakeOptions {
+            min_closed_lake_fill: 0.70,
+            ..LakeOptions::default()
+        };
+        let result = super::classify(&[lake], &options);
+        assert_eq!(result.forced_lake, [true]);
+        let shape = &result.components[0];
+        let axis_area = (shape.bounds[2] - shape.bounds[0] + 1) as f64
+            * (shape.bounds[3] - shape.bounds[1] + 1) as f64;
+        assert!((shape.area as f64 / axis_area) < 0.5);
+        assert!(shape.fill_ratio > 0.75);
+        assert!(shape.elongation > 3.0 && shape.elongation < 4.0);
+    }
+
+    #[test]
+    fn closed_shape_is_stable_at_large_world_coordinates_and_width_is_optional() {
+        let near = rect(WaterKind::River, 0, 0, 120, 60);
+        let far = rect(WaterKind::River, 1_000_000_000, -1_000_000_000, 120, 60);
+        let options = LakeOptions::default();
+        let shapes = super::classify(&[near, far], &options);
+        assert_eq!(shapes.forced_lake, [true, true]);
+        assert_eq!(
+            shapes.components[0].fill_ratio,
+            shapes.components[1].fill_ratio
+        );
+        assert_eq!(
+            shapes.components[0].elongation,
+            shapes.components[1].elongation
+        );
+        assert_eq!(
+            shapes.components[0].mean_width,
+            shapes.components[1].mean_width
+        );
+        let narrow = rect(WaterKind::River, 0, 0, 120, 60);
+        let width_gate = LakeOptions {
+            min_closed_lake_mean_width: 61.0,
+            ..options
+        };
+        assert_eq!(super::classify(&[narrow], &width_gate).forced_lake, [false]);
     }
 }
