@@ -28,7 +28,7 @@ This is agreement on the tuning mask, not a whole-world accuracy claim. See the
 [settings, evaluation and limitations](docs/lake-detection.md#mask-calibration).
 Modifier textures appear on `debug/water_map.png`; the clean inland and combined
 overviews also mark coral regions with magenta dots and underground cave water
-with light-grey dots. These sparse overlays replace pixels only inside the original
+with dark-grey dots. These sparse overlays replace pixels only inside the original
 region geometry, while the normal river, lake or swamp colour remains visible
 underneath. This height-filtered sample has no `CAVE`
 regions because covered water above the cutoff remains part of the surface
@@ -60,7 +60,7 @@ removes small isolated ones. Desert rivers and lakes use lighter sand colours.
 <details>
 <summary>Coral and cave overlays with unrestricted cave scanning</summary>
 
-![Minecraft water map with magenta coral dots and light-grey cave-water dots](docs/images/minecraft-coral-cave-map.png)
+![Minecraft water map with magenta coral dots and dark-grey cave-water dots](docs/images/minecraft-coral-cave-map.png)
 
 </details>
 
@@ -213,7 +213,7 @@ validation aids:
 * `water_combined_map.png` - cleaned ocean temperature/depth zones with rivers,
   lakes and swamps, and a shared legend. Ocean pixels take priority wherever
   coastal water shares an output pixel with an inland region. Magenta dots mark
-  coral regions and light-grey dots mark cave water without hiding its water kind
+  coral regions and dark-grey dots mark cave water without hiding its water kind
   or changing either outline.
 * `water_inland_map.png` - the mirror image of the ocean map: the sea flattened to
   one green-blue backdrop, with the rivers, lakes and swamps picked out against
@@ -670,7 +670,7 @@ the default. Keep both together to reproduce the classification and image at
 this commit. Thread count affects speed only. The command uses a height cutoff
 and retains covered mountain rivers.
 For the unrestricted cave scan, remove `--max-below-sea-level 10`. The default
-`--min-cave-body 4000` filters small cave-classified pools, while light-grey dots
+`--min-cave-body 4000` filters small cave-classified pools, while dark-grey dots
 show the retained cave geometry over its normal water-kind colour and magenta dots
 show coral regions on the inland and combined maps.
 Cave pools dominate the total region count in the example world, so filtering

@@ -35,7 +35,7 @@ const TEXT_DIM: [u8; 3] = [150, 152, 160];
 const HEADER: [u8; 3] = [126, 198, 255];
 const RIVER_COLOR: [u8; 3] = [0x4f, 0xc4, 0xc1];
 const SWAMP_COLOR: [u8; 3] = [0xc4, 0xa4, 0x84];
-const CAVE_DOT_COLOR: [u8; 3] = [0xd2, 0xd6, 0xdc];
+const CAVE_DOT_COLOR: [u8; 3] = [0x56, 0x5a, 0x60];
 const CORAL_DOT_COLOR: [u8; 3] = [0xff, 0x5a, 0xbe];
 
 pub struct MapOptions {
