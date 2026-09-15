@@ -33,6 +33,7 @@ const PANEL_BG: [u8; 3] = [8, 8, 12];
 const TEXT: [u8; 3] = [232, 232, 236];
 const TEXT_DIM: [u8; 3] = [150, 152, 160];
 const HEADER: [u8; 3] = [126, 198, 255];
+const RIVER_COLOR: [u8; 3] = [0x4f, 0xc4, 0xc1];
 const SWAMP_COLOR: [u8; 3] = [0xc4, 0xa4, 0x84];
 
 pub struct MapOptions {
@@ -827,7 +828,7 @@ fn ocean_rows(regions: &[WaterRegion], sea_level: i16, blocks_per_pixel: u32, mi
 fn inland_color(kind: WaterKind) -> [u8; 3] {
     match kind {
         WaterKind::Sea => [36, 112, 120],
-        WaterKind::River => [0x3a, 0xe1, 0xcd],
+        WaterKind::River => RIVER_COLOR,
         WaterKind::Lake => [0x99, 0xca, 0xcd],
         WaterKind::Swamp => SWAMP_COLOR,
     }

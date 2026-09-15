@@ -26,6 +26,12 @@ Both class recalls exceed 90%; the requested 95% overall target is not yet met.
 Paint over non-water, oceans and swamps is excluded.
 This is agreement on the tuning mask, not a whole-world accuracy claim. See the
 [settings, evaluation and limitations](docs/lake-detection.md#mask-calibration).
+Modifier textures appear on `debug/water_map.png`: coral regions use magenta
+dots, ice uses pale stripes and cave water uses a dark diagonal texture. The
+clean combined overview intentionally omits those textures and does not paint
+underground cave pools over land. This height-filtered sample has no `CAVE`
+regions because covered water above the cutoff remains part of the surface
+network; omit the height filter to produce separately classified cave water.
 The earlier classifier produced 2,336 regions. The additional lake/channel cuts
 preserve exactly the same 351,359,105 retained water columns; short channels and
 attribute fragments can now be smaller than the earlier 2,000-column cleanup floor.
@@ -226,7 +232,7 @@ validation aids:
 | Warm ocean | `#4e5d7c` | `#2b3752` |
 | Normal ocean | `#12326e` | `#091937` |
 | Cold ocean | `#48659c` | `#2b3d5e` |
-| River / lake | River `#3ae1cd` | Lake `#99cacd` |
+| River / lake | River `#4fc4c1` | Lake `#99cacd` |
 | Desert river / lake | River `#ead7a0` | Lake `#cbb984` |
 | Swamp | Light brown `#c4a484` | `#c4a484` |
 
@@ -624,13 +630,32 @@ separate from `--ocean-map-min-area`: the latter simplifies only visible ocean
 colour patches (including depth patches) in the ocean and combined PNGs. Changing
 only that visual setting does **not** reduce the exported region count.
 
-The current cleaner preset for this world is:
+### Reproduce the README sample maps exactly
+
+The sample maps in this README were generated with the checked-in
+`docs/lake-defaults.json` and this complete command:
 
 ```bash
-cargo run --release -- --world "/path/to/world" --output ./generated --export-map --max-below-sea-level 10 --min-water-body 2000 --min-river-merge 20000 --min-sea-merge 10000 --ocean-map-min-area 10000
+cargo run --release -- \
+  --world "/path/to/world" \
+  --output ./generated \
+  --export-map \
+  --export-json \
+  --lake-debug \
+  --lake-config docs/lake-defaults.json \
+  --map-scale 8 \
+  --max-below-sea-level 10 \
+  --min-water-body 2000 \
+  --min-river-merge 20000 \
+  --min-sea-merge 10000 \
+  --ocean-map-min-area 10000
 ```
 
-The command above uses a height cutoff and retains covered mountain rivers.
+The JSON file contains every lake/core/closed-body threshold used by the sample;
+the command spells out every non-default scan, merge and render parameter. Keep
+both together to reproduce the classification and image at this commit. Thread
+count affects speed only. The command uses a height cutoff and retains covered
+mountain rivers.
 For the original unrestricted cave scan, remove `--max-below-sea-level 10`;
 start with `--min-cave-body 4000` to filter small cave-classified pools.
 Cave pools dominate the total region count in the example world, so filtering

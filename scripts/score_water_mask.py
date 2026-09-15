@@ -15,8 +15,9 @@ import struct
 import numpy as np
 from PIL import Image
 
-RIVER = ((58, 225, 205), (234, 215, 160))
+RIVER = ((79, 196, 193), (58, 225, 205), (234, 215, 160))
 LAKE = ((153, 202, 205), (203, 185, 132))
+DEFAULT_RIVER_BRUSH = (58, 225, 205)
 
 
 def classes(rgb):
@@ -56,7 +57,7 @@ def main():
     parser.add_argument("--reference-map", type=Path, required=True)
     parser.add_argument("--reference-data", type=Path, required=True, help="water_regions.bin for the reference map")
     parser.add_argument("--map-scale", type=int, default=8)
-    parser.add_argument("--river-color", type=brush_color, default=RIVER[0], help="river brush RGB, default 3ae1cd")
+    parser.add_argument("--river-color", type=brush_color, default=DEFAULT_RIVER_BRUSH, help="river brush RGB, default 3ae1cd")
     parser.add_argument("--lake-color", type=brush_color, default=LAKE[0], help="lake brush RGB, default 99cacd")
     parser.add_argument("--map", type=Path, action="append", required=True, help="candidate combined PNG; repeat to compare")
     parser.add_argument("--output", type=Path, help="optional JSON report")

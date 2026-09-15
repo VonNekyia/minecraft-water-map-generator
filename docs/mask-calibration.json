@@ -105,7 +105,7 @@
     },
     {
       "version": "mask-v2-final",
-      "png_sha256": "948cf31b37ae3282c28fedc76287e7f949c56cd347985cf21e29b0a21e57b176",
+      "png_sha256": "8a679eca1ac634233fbfdd93de3b83dd534ae90c467c23ad43fd38dfec070e03",
       "inland_mask_sha256": "c85b68ab907edb6f6acccf69a6186d8bc80c8a550b5d2b230433b9c9c5ff692c",
       "inland_mask_differing_pixels": 0,
       "sample_count": 498875,
