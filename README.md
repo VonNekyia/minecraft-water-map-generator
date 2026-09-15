@@ -26,10 +26,11 @@ Both class recalls exceed 90%; the requested 95% overall target is not yet met.
 Paint over non-water, oceans and swamps is excluded.
 This is agreement on the tuning mask, not a whole-world accuracy claim. See the
 [settings, evaluation and limitations](docs/lake-detection.md#mask-calibration).
-Modifier textures appear on `debug/water_map.png`: coral regions use magenta
-dots, ice uses pale stripes and cave water uses a dark diagonal texture. The
-clean combined overview intentionally omits those textures and does not paint
-underground cave pools over land. This height-filtered sample has no `CAVE`
+Modifier textures appear on `debug/water_map.png`; the clean inland and combined
+overviews also mark coral regions with magenta dots and underground cave water
+with orange dots. These sparse overlays replace pixels only inside the original
+region geometry. Cave water is otherwise left on the land backdrop instead of
+being painted as a surface lake. This height-filtered sample has no `CAVE`
 regions because covered water above the cutoff remains part of the surface
 network; omit the height filter to produce separately classified cave water.
 The earlier classifier produced 2,336 regions. The additional lake/channel cuts
@@ -53,6 +54,13 @@ removes small isolated ones. Desert rivers and lakes use lighter sand colours.
 <summary>River, lake and swamp map</summary>
 
 ![Minecraft river and lake map with desert water and swamps](docs/images/minecraft-river-lake-map.png)
+
+</details>
+
+<details>
+<summary>Coral and cave overlays with unrestricted cave scanning</summary>
+
+![Minecraft water map with magenta coral dots and orange cave-water dots](docs/images/minecraft-coral-cave-map.png)
 
 </details>
 
@@ -164,13 +172,13 @@ Options:
 | `--no-lake-detection` | disable the new lake pass for comparison with the earlier classifier |
 | `--map-scale <n>` | blocks per pixel in the debug maps, default 8 |
 | `--sea-level <y>` | override the detected sea level |
-| `--min-water-body <n>` | minimum retained water-region area, default 200 columns; final pieces below it are dropped |
-| `--min-river-merge <n>` | merge river regions smaller than N columns into adjoining rivers, default 5000; 0 disables this extra pass |
-| `--min-sea-merge <n>` | merge actual sea regions smaller than N columns into adjoining sea regions, default 0 (off) |
+| `--min-water-body <n>` | minimum retained surface-water area, default 2000 columns; final pieces below it are dropped |
+| `--min-river-merge <n>` | merge river regions smaller than N columns into adjoining rivers, default 20000; 0 disables this extra pass |
+| `--min-sea-merge <n>` | merge actual sea regions smaller than N columns into adjoining sea regions, default 10000; 0 disables this pass |
 | `--ocean-map-min-area <n>` | minimum ocean colour-patch area in the overview, default 10000; 0 disables the visual sieve |
 | `--max-below-sea-level <n>` | retain water surfaces at or above sea level minus N, including covered rivers; off unless specified |
 | `--no-caves` | skip all water that cannot see the sky; incompatible with the height rule |
-| `--min-cave-body <n>` | smallest cave pool to report; defaults to `--min-water-body` |
+| `--min-cave-body <n>` | smallest cave pool to report, default 4000 columns |
 | `--min-sea-body <n>` | connected ocean-biome columns needed to be a sea, default 2 000 000 |
 
 Output:
@@ -204,11 +212,13 @@ validation aids:
   this map shows the shelf, the slope and the basins.
 * `water_combined_map.png` - cleaned ocean temperature/depth zones with rivers,
   lakes and swamps, and a shared legend. Ocean pixels take priority wherever
-  coastal water shares an output pixel with an inland region.
+  coastal water shares an output pixel with an inland region. Magenta dots mark
+  coral regions and orange dots mark cave water without changing either outline.
 * `water_inland_map.png` - the mirror image of the ocean map: the sea flattened to
   one green-blue backdrop, with the rivers, lakes and swamps picked out against
   it. Inland water is drawn after the sea, because at eight blocks per pixel a
   river shares its pixel with the coast it runs into and would otherwise vanish.
+  It carries the same sparse coral and cave overlays as the combined map.
 * `water_ocean_map.png` - the seas on their own in six colours: muted blue, navy and
   slate blue for warm, medium and cold, each in a shelf and a basin shade.
   Only two depth steps rather than the model's three, because this world's ocean
@@ -600,10 +610,10 @@ preserve water geometry, so the final region count is not bounded by the earlier
 area floor. Increase lake core radius/density to accept fewer broadened sections;
 use `--no-lake-detection` to reproduce the historical cleanup comparisons below.
 
-* **Retention** (`--min-water-body`, default 200): surviving regions below this
+* **Retention** (`--min-water-body`, default 2000): surviving regions below this
   size are removed. Raising it can remove isolated ponds, short streams and fine
   water features. It also controls the earlier tiny-fragment absorption rule.
-* **Merging** (`--min-river-merge`, default 5000): a smaller river region joins an
+* **Merging** (`--min-river-merge`, default 20000): a smaller river region joins an
   adjoining river of equal or greater current area. No water is removed by this
   pass, and the exact run geometry is preserved. The threshold does not have to
   match the retention threshold.
@@ -614,8 +624,8 @@ shared boundary to pick a larger neighbour. Areas and boundaries are updated aft
 every merge until no eligible merge remains. There is no four-to-one size ratio
 or fixed round limit in this pass. River never merges into lake, swamp, ocean or
 cave, and disconnected rivers never merge across dry land. A connected river
-component whose *entire* area is under 5000 therefore remains small; the tool
-reports these as `small unmergeable`. Retention can still remove it below 200.
+component whose *entire* area is under 20000 therefore remains small; the tool
+reports these as `small unmergeable`. Retention can still remove it below 2000.
 
 The larger current group supplies temperature, vegetation and modifiers such as
 `DESERT` and `ICE`. Depth, maximum depth, surface height and depth-distribution
@@ -625,7 +635,7 @@ map can therefore lose a short desert-coloured segment without losing the river
 itself. Regions exactly at the threshold are not candidates for merging.
 
 `--min-sea-merge` applies the same rule to actual sea regions in the binary and
-JSON data. It defaults to 0 to preserve the previous data segmentation. This is
+JSON data. It defaults to 10000 in the tuned preset. This is
 separate from `--ocean-map-min-area`: the latter simplifies only visible ocean
 colour patches (including depth patches) in the ocean and combined PNGs. Changing
 only that visual setting does **not** reduce the exported region count.
@@ -646,18 +656,22 @@ cargo run --release -- \
   --map-scale 8 \
   --max-below-sea-level 10 \
   --min-water-body 2000 \
+  --min-cave-body 4000 \
+  --min-sea-body 2000000 \
   --min-river-merge 20000 \
   --min-sea-merge 10000 \
   --ocean-map-min-area 10000
 ```
 
 The JSON file contains every lake/core/closed-body threshold used by the sample;
-the command spells out every non-default scan, merge and render parameter. Keep
-both together to reproduce the classification and image at this commit. Thread
-count affects speed only. The command uses a height cutoff and retains covered
-mountain rivers.
-For the original unrestricted cave scan, remove `--max-below-sea-level 10`;
-start with `--min-cave-body 4000` to filter small cave-classified pools.
+the command pins every scan, merge and render parameter even where it now equals
+the default. Keep both together to reproduce the classification and image at
+this commit. Thread count affects speed only. The command uses a height cutoff
+and retains covered mountain rivers.
+For the unrestricted cave scan, remove `--max-below-sea-level 10`. The default
+`--min-cave-body 4000` filters small cave-classified pools, while orange dots show
+the retained cave geometry and magenta dots show coral regions on the inland and
+combined maps.
 Cave pools dominate the total region count in the example world, so filtering
 them has a much larger effect on the total than changing surface-water labels.
 
@@ -692,12 +706,13 @@ of every kind. It also removes genuine small ponds and isolated stream fragments
 use 1000 when those matter more than a cleaner overview. Covered mountain passages
 still qualify under the same height rule, rather than being excluded by a roof.
 Both comparison exports passed their binary lookup verification (65 and 66 checks).
-The CLI defaults are unchanged. The current samples use the same explicit preset,
-with the desert/canyon and raw-mud detection described above.
+The CLI now uses the selected 2000 / 20000 / 10000 / 10000 preset by default,
+with the desert/canyon and raw-mud detection described above. The historical
+rows remain useful comparisons with less aggressive settings.
 
 ### Why small spots can remain visible
 
-`--min-water-body 200` is a retention floor in **square blocks**, not a minimum
+`--min-water-body` is a retention floor in **square blocks**, not a minimum
 width in blocks or pixels. In the earlier balanced export (before source-only
 filtering), no region had fewer
 than 200 water columns, and a run-level connectivity audit found all 2,785
@@ -816,7 +831,7 @@ for the exact mask and protected-ocean checks. Times depend on hardware and cach
 Historical measurement before source-only water, mud support and lake refinement,
 on the same 30 GB / 2509 region world, 24 threads:
 
-Defaults (`--min-water-body 200`, caves included):
+Historical defaults (`--min-water-body 200`, caves included):
 
 ```text
 region files scanned   2509

@@ -107,11 +107,11 @@ struct Cli {
     #[arg(long, conflicts_with = "no_caves")]
     max_below_sea_level: Option<u16>,
 
-    /// Smallest cave pool to report, in columns. Defaults to `--min-water-body`.
+    /// Smallest cave pool to report, in columns.
     /// Aquifers are far more numerous than lakes, so this usually wants to be
     /// higher than the surface threshold.
-    #[arg(long)]
-    min_cave_body: Option<u32>,
+    #[arg(long, default_value_t = config::MIN_CAVE_BODY_COLUMNS)]
+    min_cave_body: u32,
 
     /// How large a connected body of water must be, in columns, before it counts
     /// as a sea. Smaller bodies become lakes whatever their biome says.
@@ -188,7 +188,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     } else {
         println!(
             "  cave water       included, min {} columns",
-            cli.min_cave_body.unwrap_or(cli.min_water_body)
+            cli.min_cave_body
         );
     }
     println!("  threads          {threads}");
@@ -262,7 +262,6 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let scan_seconds = scan_started.elapsed().as_secs_f64();
 
     // ---- phase 2: regions --------------------------------------------------
-    let min_cave_body = cli.min_cave_body.unwrap_or(cli.min_water_body);
     let regions_started = Instant::now();
     let grid = WorldGrid::build(region_waters);
     let (mut regions, mut region_stats) =
@@ -270,7 +269,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             &grid,
             &registry,
             cli.min_water_body,
-            min_cave_body,
+            cli.min_cave_body,
             cli.min_sea_body,
             water::consolidate::MergeOptions {
                 river_min_area: cli.min_river_merge,
@@ -594,6 +593,19 @@ mod tests {
     }
 
     #[test]
+    fn cli_defaults_match_the_tuned_map_preset() {
+        let cli = Cli::try_parse_from(["water-analyzer", "--world", "world"]).unwrap();
+        assert_eq!(cli.map_scale, 8);
+        assert_eq!(cli.min_water_body, 2_000);
+        assert_eq!(cli.min_river_merge, 20_000);
+        assert_eq!(cli.min_sea_merge, 10_000);
+        assert_eq!(cli.ocean_map_min_area, 10_000);
+        assert_eq!(cli.min_cave_body, 4_000);
+        assert_eq!(cli.max_below_sea_level, None);
+        assert!(!cli.no_caves);
+    }
+
+    #[test]
     fn world_path_must_contain_a_region_directory() {
         let cli = Cli {
             world: PathBuf::from("definitely-not-a-world"),
@@ -614,7 +626,7 @@ mod tests {
             ocean_map_min_area: config::OCEAN_MAP_MIN_AREA,
             no_caves: false,
             max_below_sea_level: None,
-            min_cave_body: None,
+            min_cave_body: config::MIN_CAVE_BODY_COLUMNS,
             min_sea_body: config::SEA_MIN_COLUMNS,
         };
         assert!(run(&cli).is_err());

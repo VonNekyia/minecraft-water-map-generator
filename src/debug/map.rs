@@ -35,6 +35,8 @@ const TEXT_DIM: [u8; 3] = [150, 152, 160];
 const HEADER: [u8; 3] = [126, 198, 255];
 const RIVER_COLOR: [u8; 3] = [0x4f, 0xc4, 0xc1];
 const SWAMP_COLOR: [u8; 3] = [0xc4, 0xa4, 0x84];
+const CAVE_DOT_COLOR: [u8; 3] = [0xff, 0x8b, 0x2c];
+const CORAL_DOT_COLOR: [u8; 3] = [0xff, 0x5a, 0xbe];
 
 pub struct MapOptions {
     /// Blocks per pixel.
@@ -224,22 +226,34 @@ pub fn region_color(region: &WaterRegion) -> [u8; 3] {
 /// The patterns are keyed off absolute canvas coordinates so a legend swatch
 /// shows exactly the same texture as the map does.
 fn modifier_overlay(modifiers: Modifiers, x: usize, y: usize) -> Option<[u8; 3]> {
-    // Cave first: it says the water is not where the surface is, which changes how
-    // everything else about the patch should be read.
-    if modifiers.contains(Modifiers::CAVE) && (3 * x + y) % 9 < 2 {
-        return Some([24, 20, 32]);
+    if let Some(color) = overview_modifier_overlay(modifiers, x, y) {
+        return Some(color);
     }
     if modifiers.contains(Modifiers::ICE) && (x + y) % 8 < 2 {
         return Some([235, 248, 255]);
-    }
-    if modifiers.contains(Modifiers::CORALS) && x % 6 == 2 && y % 6 == 2 {
-        return Some([255, 90, 190]);
     }
     if modifiers.contains(Modifiers::DESERT) && (x + 5 * y) % 11 < 2 {
         return Some([226, 200, 120]);
     }
     if modifiers.contains(Modifiers::MANGROVE) && x % 7 == 3 && y % 7 == 5 {
         return Some([150, 80, 40]);
+    }
+    None
+}
+
+/// Sparse overlays shared by the full classification and clean overview maps.
+/// They only replace pixels already owned by a matching region; they never grow
+/// or fill its geometry. Cave dots are drawn over the land backdrop because the
+/// clean overview deliberately does not paint underground water as a surface lake.
+fn overview_modifier_overlay(modifiers: Modifiers, x: usize, y: usize) -> Option<[u8; 3]> {
+    if x % 6 != 2 || y % 6 != 2 {
+        return None;
+    }
+    if modifiers.contains(Modifiers::CAVE) {
+        return Some(CAVE_DOT_COLOR);
+    }
+    if modifiers.contains(Modifiers::CORALS) {
+        return Some(CORAL_DOT_COLOR);
     }
     None
 }
@@ -880,6 +894,25 @@ fn paint_inland(canvas: &mut Canvas, regions: &[WaterRegion], p: &Projection, in
     }
 }
 
+/// Add coral and underground-water markers without changing any base map shape.
+fn paint_overview_modifiers(canvas: &mut Canvas, regions: &[WaterRegion], p: &Projection) {
+    for region in regions.iter().filter(|region| {
+        region
+            .modifiers
+            .intersects(Modifiers::CORALS | Modifiers::CAVE)
+    }) {
+        for run in &region.geometry.runs {
+            let (xa, y) = p.px(run.x0, run.z);
+            let (xb, _) = p.px(run.x1, run.z);
+            for x in xa..=xb {
+                if let Some(color) = overview_modifier_overlay(region.modifiers, x, y) {
+                    canvas.set(x, y, color);
+                }
+            }
+        }
+    }
+}
+
 fn inland_rows(regions: &[WaterRegion], blocks_per_pixel: u32) -> Vec<Row> {
     let count = |kind: WaterKind| {
         regions
@@ -897,6 +930,9 @@ fn inland_rows(regions: &[WaterRegion], blocks_per_pixel: u32) -> Vec<Row> {
         entry("SWAMP", Swatch::Color(inland_color(WaterKind::Swamp))),
         entry("DESERT RIVER", Swatch::Color(inland_region_color(WaterKind::River, Modifiers::DESERT))),
         entry("DESERT LAKE", Swatch::Color(inland_region_color(WaterKind::Lake, Modifiers::DESERT))),
+        heading("OVERLAYS"),
+        entry("CORALS", Swatch::Pattern(inland_color(WaterKind::Sea), Modifiers::CORALS)),
+        entry("CAVE WATER", Swatch::Pattern(BG_LAND, Modifiers::CAVE)),
         heading("BACKGROUND"),
         entry("LAND", Swatch::Color(BG_LAND)),
         entry("NOT GENERATED", Swatch::Color(BG_VOID)),
@@ -921,6 +957,9 @@ fn combined_rows(regions: &[WaterRegion], sea_level: i16, blocks_per_pixel: u32,
         entry("SWAMP", Swatch::Color(inland_color(WaterKind::Swamp))),
         entry("DESERT RIVER", Swatch::Color(inland_region_color(WaterKind::River, Modifiers::DESERT))),
         entry("DESERT LAKE", Swatch::Color(inland_region_color(WaterKind::Lake, Modifiers::DESERT))),
+        heading("OVERLAYS"),
+        entry("CORALS", Swatch::Pattern(inland_color(WaterKind::Sea), Modifiers::CORALS)),
+        entry("CAVE WATER", Swatch::Pattern(BG_LAND, Modifiers::CAVE)),
         note("USES FILTERED WATER DATA"),
         note("OCEAN HAS PRIORITY AT COAST"),
     ]);
@@ -1027,12 +1066,14 @@ pub fn render(
     let mut inland = Canvas::new(panel + p.w, height, BG_VOID);
     paint_land(&mut inland, grid, &p);
     paint_inland(&mut inland, regions, &p, true);
+    paint_overview_modifiers(&mut inland, regions, &p);
     inland_legend.draw(&mut inland, panel);
     let e = inland.write_png(&dir.join("water_inland_map.png"))?;
 
     // Reuse the cleaned ocean layer, preserving its pixels when inland water
     // shares a coastal pixel. The combined view gives ocean zones priority.
     paint_inland(&mut ocean, regions, &p, false);
+    paint_overview_modifiers(&mut ocean, regions, &p);
     combined_legend.draw(&mut ocean, panel);
     let f = ocean.write_png(&dir.join("water_combined_map.png"))?;
 
@@ -1263,6 +1304,51 @@ mod tests {
         assert!((0..64)
             .flat_map(|x| (0..64).map(move |y| (x, y)))
             .any(|(x, y)| modifier_overlay(Modifiers::CORALS, x, y).is_some()));
+    }
+
+    #[test]
+    fn overview_dots_are_sparse_and_cave_takes_priority() {
+        assert_eq!(
+            overview_modifier_overlay(Modifiers::CORALS, 2, 2),
+            Some(CORAL_DOT_COLOR)
+        );
+        assert_eq!(
+            overview_modifier_overlay(Modifiers::CAVE, 2, 2),
+            Some(CAVE_DOT_COLOR)
+        );
+        assert_eq!(
+            overview_modifier_overlay(Modifiers::CORALS | Modifiers::CAVE, 2, 2),
+            Some(CAVE_DOT_COLOR)
+        );
+        assert_eq!(overview_modifier_overlay(Modifiers::CORALS, 3, 2), None);
+        assert_eq!(overview_modifier_overlay(Modifiers::CORALS, 2, 3), None);
+        assert_eq!(overview_modifier_overlay(Modifiers::empty(), 2, 2), None);
+    }
+
+    #[test]
+    fn overview_modifiers_only_replace_pixels_inside_the_original_geometry() {
+        let mut marked = region(0, WaterKind::Lake, Temperature::Medium, Some(Depth::Shallow));
+        marked.modifiers = Modifiers::CAVE;
+        marked.geometry = RegionGeometry {
+            min_x: 1,
+            min_z: 2,
+            max_x: 4,
+            max_z: 2,
+            runs: vec![Run { z: 2, x0: 1, x1: 4 }],
+            column_count: 4,
+        };
+        let p = Projection::new((0, 0, 7, 7), 1);
+        let mut canvas = Canvas::new(8, 8, BG_LAND);
+        paint_overview_modifiers(&mut canvas, &[marked], &p);
+
+        let pixel = |x: usize, y: usize| {
+            let i = (y * canvas.w + x) * 3;
+            [canvas.px[i], canvas.px[i + 1], canvas.px[i + 2]]
+        };
+        assert_eq!(pixel(2, 2), CAVE_DOT_COLOR);
+        assert_eq!(pixel(1, 2), BG_LAND, "non-dot geometry must keep its base colour");
+        assert_eq!(pixel(3, 2), BG_LAND, "the overlay must stay sparse");
+        assert_eq!(pixel(2, 1), BG_LAND, "pixels outside the run must never be marked");
     }
 
     #[test]

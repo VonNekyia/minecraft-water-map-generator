@@ -286,7 +286,10 @@ mod tests {
     const RIVER: u8 = WaterKind::River as u8;
     const SEA: u8 = WaterKind::Sea as u8;
 
-    const MIN: u32 = config::MIN_WATER_BODY_COLUMNS;
+    // Keep the synthetic absorption cases independent of the CLI preset. These
+    // tests exercise the algorithm around a small, easy-to-read threshold; the
+    // actual configured default is covered by the CLI-default test in main.rs.
+    const MIN: u32 = 200;
 
     fn lakes(n: usize) -> Vec<u8> {
         vec![LAKE; n]

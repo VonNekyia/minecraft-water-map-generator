@@ -40,7 +40,11 @@ pub const SEA_LEVEL_MIN_SHARE: f64 = 0.25;
 ///
 /// The same number is the "too small to stand on its own" mark during absorption:
 /// a piece below it always merges into its best neighbour, whatever its kind.
-pub const MIN_WATER_BODY_COLUMNS: u32 = 200;
+pub const MIN_WATER_BODY_COLUMNS: u32 = 2_000;
+
+/// Default minimum size of an underground cave pool. Cave aquifers are far more
+/// numerous than surface water, so they use a stricter floor by default.
+pub const MIN_CAVE_BODY_COLUMNS: u32 = 4_000;
 
 /// How much *connected ocean-biome water* it takes to be a `Sea`, in columns.
 /// Overridable with `--min-sea-body`.
@@ -141,9 +145,9 @@ pub const OCEAN_MAP_MIN_AREA: u64 = 10_000;
 
 /// River regions below this area merge into adjoining river regions, after
 /// shape correction. Independent of the retention threshold; zero disables.
-pub const RIVER_MERGE_MIN_COLUMNS: u32 = 5_000;
-/// Real sea-region consolidation is opt-in; the ocean map sieve is separate.
-pub const SEA_MERGE_MIN_COLUMNS: u32 = 0;
+pub const RIVER_MERGE_MIN_COLUMNS: u32 = 20_000;
+/// Merge small adjacent sea attribute regions; the ocean map sieve is separate.
+pub const SEA_MERGE_MIN_COLUMNS: u32 = 10_000;
 
 // ---------------------------------------------------------------------------
 // Absorption of small regions into their neighbours
