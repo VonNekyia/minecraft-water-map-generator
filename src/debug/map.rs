@@ -35,7 +35,7 @@ const TEXT_DIM: [u8; 3] = [150, 152, 160];
 const HEADER: [u8; 3] = [126, 198, 255];
 const RIVER_COLOR: [u8; 3] = [0x4f, 0xc4, 0xc1];
 const SWAMP_COLOR: [u8; 3] = [0xc4, 0xa4, 0x84];
-const CAVE_DOT_COLOR: [u8; 3] = [0xff, 0x8b, 0x2c];
+const CAVE_DOT_COLOR: [u8; 3] = [0xd2, 0xd6, 0xdc];
 const CORAL_DOT_COLOR: [u8; 3] = [0xff, 0x5a, 0xbe];
 
 pub struct MapOptions {
@@ -243,8 +243,8 @@ fn modifier_overlay(modifiers: Modifiers, x: usize, y: usize) -> Option<[u8; 3]>
 
 /// Sparse overlays shared by the full classification and clean overview maps.
 /// They only replace pixels already owned by a matching region; they never grow
-/// or fill its geometry. Cave dots are drawn over the land backdrop because the
-/// clean overview deliberately does not paint underground water as a surface lake.
+/// or fill its geometry. Cave dots sit on the normal river/lake/swamp colour so
+/// the water kind remains readable underneath the cave marker.
 fn overview_modifier_overlay(modifiers: Modifiers, x: usize, y: usize) -> Option<[u8; 3]> {
     if x % 6 != 2 || y % 6 != 2 {
         return None;
@@ -874,10 +874,6 @@ fn paint_inland(canvas: &mut Canvas, regions: &[WaterRegion], p: &Projection, in
             if (region.kind == WaterKind::Sea) != sea_pass {
                 continue;
             }
-            // Underground pools would cover the land in lake colour.
-            if region.modifiers.contains(Modifiers::CAVE) {
-                continue;
-            }
             let color = inland_region_color(region.kind, region.modifiers);
             for run in &region.geometry.runs {
                 let (xa, y) = p.px(run.x0, run.z);
@@ -932,7 +928,10 @@ fn inland_rows(regions: &[WaterRegion], blocks_per_pixel: u32) -> Vec<Row> {
         entry("DESERT LAKE", Swatch::Color(inland_region_color(WaterKind::Lake, Modifiers::DESERT))),
         heading("OVERLAYS"),
         entry("CORALS", Swatch::Pattern(inland_color(WaterKind::Sea), Modifiers::CORALS)),
-        entry("CAVE WATER", Swatch::Pattern(BG_LAND, Modifiers::CAVE)),
+        entry(
+            "CAVE WATER",
+            Swatch::Pattern(inland_color(WaterKind::Lake), Modifiers::CAVE),
+        ),
         heading("BACKGROUND"),
         entry("LAND", Swatch::Color(BG_LAND)),
         entry("NOT GENERATED", Swatch::Color(BG_VOID)),
@@ -959,7 +958,10 @@ fn combined_rows(regions: &[WaterRegion], sea_level: i16, blocks_per_pixel: u32,
         entry("DESERT LAKE", Swatch::Color(inland_region_color(WaterKind::Lake, Modifiers::DESERT))),
         heading("OVERLAYS"),
         entry("CORALS", Swatch::Pattern(inland_color(WaterKind::Sea), Modifiers::CORALS)),
-        entry("CAVE WATER", Swatch::Pattern(BG_LAND, Modifiers::CAVE)),
+        entry(
+            "CAVE WATER",
+            Swatch::Pattern(inland_color(WaterKind::Lake), Modifiers::CAVE),
+        ),
         note("USES FILTERED WATER DATA"),
         note("OCEAN HAS PRIORITY AT COAST"),
     ]);
@@ -1326,29 +1328,32 @@ mod tests {
     }
 
     #[test]
-    fn overview_modifiers_only_replace_pixels_inside_the_original_geometry() {
-        let mut marked = region(0, WaterKind::Lake, Temperature::Medium, Some(Depth::Shallow));
-        marked.modifiers = Modifiers::CAVE;
-        marked.geometry = RegionGeometry {
-            min_x: 1,
-            min_z: 2,
-            max_x: 4,
-            max_z: 2,
-            runs: vec![Run { z: 2, x0: 1, x1: 4 }],
-            column_count: 4,
-        };
+    fn cave_overlay_keeps_the_water_kind_visible_under_sparse_dots() {
         let p = Projection::new((0, 0, 7, 7), 1);
-        let mut canvas = Canvas::new(8, 8, BG_LAND);
-        paint_overview_modifiers(&mut canvas, &[marked], &p);
+        for kind in [WaterKind::River, WaterKind::Lake, WaterKind::Swamp] {
+            let mut marked = region(0, kind, Temperature::Medium, Some(Depth::Shallow));
+            marked.modifiers = Modifiers::CAVE;
+            marked.geometry = RegionGeometry {
+                min_x: 1,
+                min_z: 2,
+                max_x: 4,
+                max_z: 2,
+                runs: vec![Run { z: 2, x0: 1, x1: 4 }],
+                column_count: 4,
+            };
+            let mut canvas = Canvas::new(8, 8, BG_LAND);
+            paint_inland(&mut canvas, std::slice::from_ref(&marked), &p, true);
+            paint_overview_modifiers(&mut canvas, &[marked], &p);
 
-        let pixel = |x: usize, y: usize| {
-            let i = (y * canvas.w + x) * 3;
-            [canvas.px[i], canvas.px[i + 1], canvas.px[i + 2]]
-        };
-        assert_eq!(pixel(2, 2), CAVE_DOT_COLOR);
-        assert_eq!(pixel(1, 2), BG_LAND, "non-dot geometry must keep its base colour");
-        assert_eq!(pixel(3, 2), BG_LAND, "the overlay must stay sparse");
-        assert_eq!(pixel(2, 1), BG_LAND, "pixels outside the run must never be marked");
+            let pixel = |x: usize, y: usize| {
+                let i = (y * canvas.w + x) * 3;
+                [canvas.px[i], canvas.px[i + 1], canvas.px[i + 2]]
+            };
+            assert_eq!(pixel(2, 2), CAVE_DOT_COLOR);
+            assert_eq!(pixel(1, 2), inland_color(kind), "{kind:?} base was hidden");
+            assert_eq!(pixel(3, 2), inland_color(kind), "overlay is not sparse");
+            assert_eq!(pixel(2, 1), BG_LAND, "pixel outside the run was marked");
+        }
     }
 
     #[test]
