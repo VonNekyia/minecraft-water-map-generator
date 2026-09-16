@@ -879,14 +879,16 @@ mod tests {
         let (mut buf, mut scratch, parsed) = swamp_fixture(true);
         let registry = BiomeRegistry::vanilla_only();
         assert_eq!(scan_dryland(&buf, &parsed, &scratch, &registry, &mut [0; 256]), 0);
-        // Reuse the packed heightmap, but make every block solid. Only desert
-        // banks count; savanna and other dry terrain must stay unmarked.
+        // Reuse the packed heightmap, but make every block solid. Only desert,
+        // canyon and vanilla badlands banks count; savanna stays unmarked.
         scratch.sections[0].block_pal = (1, 1);
         for (name, expected) in [
             ("minecraft:desert", u16::MAX),
             ("minecraft:savanna", 0),
             ("minecraft:savanna_plateau", 0),
-            ("minecraft:badlands", 0),
+            ("minecraft:badlands", u16::MAX),
+            ("minecraft:eroded_badlands", u16::MAX),
+            ("minecraft:wooded_badlands", u16::MAX),
             ("minecraft:plains", 0),
         ] {
             scratch.palette[6].off = buf.len() as u32;

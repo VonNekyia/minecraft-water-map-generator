@@ -16,7 +16,7 @@ mountains. Flowing/falling water and lower water surfaces are excluded before
 classification; merging and the 2,000-column minimum then remove small regions.
 The current export contains 2,550 regions: 148 seas, 1,304 rivers, 946 lakes and
 152 swamps. Raw mud contributes to the 7.89 million square blocks of swamp;
-the desert/canyon modifier applies to 101 regions. Broad-core support separates
+the desert/canyon/vanilla-badlands modifier applies to 149 regions. Broad-core support separates
 lake basins from wide rivers, with a compactness exception for small lakes.
 Retained bodies without an ocean path become lakes up to 5,000 blocks; larger
 closed bodies up to 500,000 blocks also require a compact, non-channel-like shape.
@@ -27,10 +27,11 @@ Paint over non-water, oceans and swamps is excluded.
 This is agreement on the tuning mask, not a whole-world accuracy claim. See the
 [settings, evaluation and limitations](docs/lake-detection.md#mask-calibration).
 Modifier textures appear on `debug/water_map.png`; the clean inland and combined
-overviews also mark coral regions with magenta dots and underground cave water
-with dark-grey dots. These sparse overlays replace pixels only inside the original
-region geometry, while the normal river, lake or swamp colour remains visible
-underneath. This height-filtered sample has no `CAVE`
+overviews also mark coral regions with magenta dots, underground cave water with
+dark-grey dots, and regions whose measured water surface is at least 50% ice-covered
+with white horizontal stripes. These texture overlays replace pixels only inside
+the original region geometry, while the normal river, lake or swamp colour remains
+visible underneath. This height-filtered sample has no `CAVE`
 regions because covered water above the cutoff remains part of the surface
 network; omit the height filter to produce separately classified cave water.
 The earlier classifier produced 2,336 regions. The additional lake/channel cuts
@@ -60,7 +61,7 @@ removes small isolated ones. Desert rivers and lakes use lighter sand colours.
 <details>
 <summary>Coral and cave overlays with unrestricted cave scanning</summary>
 
-![Minecraft water map with magenta coral dots and dark-grey cave-water dots](docs/images/minecraft-coral-cave-map.png)
+![Minecraft water map with magenta coral dots, dark-grey cave-water dots and white horizontal ice stripes](docs/images/minecraft-coral-cave-map.png)
 
 </details>
 
@@ -213,13 +214,14 @@ validation aids:
 * `water_combined_map.png` - cleaned ocean temperature/depth zones with rivers,
   lakes and swamps, and a shared legend. Ocean pixels take priority wherever
   coastal water shares an output pixel with an inland region. Magenta dots mark
-  coral regions and dark-grey dots mark cave water without hiding its water kind
-  or changing either outline.
+  coral regions, dark-grey dots mark cave water, and white horizontal stripes mark
+  regions whose measured surface is at least 50% ice-covered. The overlays do not
+  hide the water kind or change any outline.
 * `water_inland_map.png` - the mirror image of the ocean map: the sea flattened to
   one green-blue backdrop, with the rivers, lakes and swamps picked out against
   it. Inland water is drawn after the sea, because at eight blocks per pixel a
   river shares its pixel with the coast it runs into and would otherwise vanish.
-  It carries the same sparse coral and cave overlays as the combined map.
+  It carries the same coral, cave and ice-cover overlays as the combined map.
 * `water_ocean_map.png` - the seas on their own in six colours: muted blue, navy and
   slate blue for warm, medium and cold, each in a shelf and a basin shade.
   Only two depth steps rather than the model's three, because this world's ocean
@@ -569,13 +571,16 @@ not, and the data says so.
 
 ### 7. Modifiers
 
-* `ICE` - the surface block really is ice with water underneath. A cold biome is
-  not enough. Ice is part of the region signature, so a frozen ocean does not
-  dissolve into the cold ocean next to it.
+* `ICE` - at least 50% of the region's measured water columns have real ice with
+  water underneath. A cold biome is not enough. White horizontal stripes show the
+  modifier without replacing the river, lake, swamp or ocean colour. Ice is part
+  of the local region signature, so a frozen ocean does not dissolve into the cold
+  ocean next to it.
 * `CORALS` - living coral blocks / fans found near the ocean floor. Dead coral does
   not count.
-* `DESERT` - inland water in desert or canyon biomes. It retains its water kind;
-  `desert` is a modifier.
+* `DESERT` - inland water in desert or canyon biomes, plus vanilla `badlands`,
+  `eroded_badlands` and `wooded_badlands`. It retains its water kind; `desert` is
+  a modifier. Other dry biomes such as savanna remain excluded.
 * `MANGROVE` - mangrove water. Also a modifier; the kind stays `swamp`.
 * `CAVE` - the water cannot see the sky. Cave regions are always `lake` - there is
   no sea, river or swamp without a sky - and they never merge with water above
@@ -671,8 +676,9 @@ this commit. Thread count affects speed only. The command uses a height cutoff
 and retains covered mountain rivers.
 For the unrestricted cave scan, remove `--max-below-sea-level 10`. The default
 `--min-cave-body 4000` filters small cave-classified pools, while dark-grey dots
-show the retained cave geometry over its normal water-kind colour and magenta dots
-show coral regions on the inland and combined maps.
+show the retained cave geometry over its normal water-kind colour, magenta dots
+show coral regions, and white horizontal stripes show water regions with at least
+50% measured ice cover on the inland and combined maps.
 Cave pools dominate the total region count in the example world, so filtering
 them has a much larger effect on the total than changing surface-water labels.
 

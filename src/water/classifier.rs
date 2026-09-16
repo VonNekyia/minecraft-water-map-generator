@@ -861,12 +861,21 @@ mod tests {
             .modifiers
             .contains(Modifiers::ICE));
 
-        let mut frozen = RegionAccum {
+        let mut partly_frozen = RegionAccum {
             signature: signature(WaterKind::Lake, Temperature::Cold, false, false),
             ..Default::default()
         };
-        frozen.add_cell(&registry, id, 62, 4, 0.9, 0.0, false, false, 1000);
-        assert!(finalize(2, &frozen, &registry)
+        partly_frozen.add_cell(&registry, id, 62, 4, 0.49, 0.0, false, false, 1000);
+        assert!(!finalize(2, &partly_frozen, &registry)
+            .modifiers
+            .contains(Modifiers::ICE));
+
+        let mut half_frozen = RegionAccum {
+            signature: signature(WaterKind::Lake, Temperature::Cold, false, false),
+            ..Default::default()
+        };
+        half_frozen.add_cell(&registry, id, 62, 4, 0.5, 0.0, false, false, 1000);
+        assert!(finalize(3, &half_frozen, &registry)
             .modifiers
             .contains(Modifiers::ICE));
     }

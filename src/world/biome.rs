@@ -109,9 +109,13 @@ fn traits_of(id: &str) -> BiomeTraits {
     {
         t |= BiomeTraits::FROZEN;
     }
-    // The map's sand category is explicitly desert and canyon, not every
-    // low-rainfall biome or terrain type that might look dry.
-    if contains_any(id, &["desert", "canyon"]) {
+    // The map's sand category is explicitly desert, canyon and the three vanilla
+    // badlands variants, not every low-rainfall biome or terrain type that might
+    // look dry. Exact badlands names avoid pulling in Terralith biomes such as
+    // snowy_badlands or savanna_badlands.
+    if contains_any(id, &["desert", "canyon"])
+        || matches!(id, "badlands" | "eroded_badlands" | "wooded_badlands")
+    {
         t |= BiomeTraits::DESERT;
     }
     if id.contains("mangrove") {
@@ -550,13 +554,16 @@ mod tests {
     }
 
     #[test]
-    fn desert_category_is_limited_to_desert_and_canyon_names() {
+    fn desert_category_is_limited_to_desert_canyon_and_vanilla_badlands_names() {
         for (name, temperature, downfall) in [
             ("minecraft:desert", 2.0, 0.0),
             ("terralith:desert_oasis", 2.0, 0.0),
             ("terralith:desert_canyon", 2.0, 0.0),
             ("terralith:bryce_canyon", 2.0, 0.0),
             ("terralith:amethyst_canyon", 0.95, 0.9),
+            ("minecraft:badlands", 2.0, 0.0),
+            ("minecraft:eroded_badlands", 2.0, 0.0),
+            ("minecraft:wooded_badlands", 2.0, 0.0),
         ] {
             assert!(BiomeInfo::derive(name, temperature, downfall).traits
                 .contains(BiomeTraits::DESERT), "{name}");
@@ -564,7 +571,8 @@ mod tests {
         for (name, temperature, downfall) in [
             ("minecraft:savanna", 1.2, 0.0),
             ("minecraft:savanna_plateau", 1.2, 0.0),
-            ("minecraft:badlands", 2.0, 0.0),
+            ("terralith:savanna_badlands", 1.2, 0.0),
+            ("terralith:snowy_badlands", -0.7, 0.4),
             ("terralith:brushland", 1.2, 0.2),
             ("terralith:steppe", 0.4, -0.5),
             ("terralith:arid_highlands", 1.6, 0.1),

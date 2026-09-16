@@ -208,7 +208,7 @@ pub const VEG_PLANT_DEMOTE_SHARE: f32 = 0.02;
 // ---------------------------------------------------------------------------
 
 /// Share of a region's water columns that must be covered by ice for `ICE`.
-pub const ICE_MIN_SHARE: f32 = 0.15;
+pub const ICE_MIN_SHARE: f32 = 0.50;
 
 /// Share of a region's chunks that must contain coral blocks for `CORALS`.
 pub const CORAL_MIN_SHARE: f32 = 0.02;

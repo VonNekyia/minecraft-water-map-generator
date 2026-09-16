@@ -37,6 +37,7 @@ const RIVER_COLOR: [u8; 3] = [0x4f, 0xc4, 0xc1];
 const SWAMP_COLOR: [u8; 3] = [0xc4, 0xa4, 0x84];
 const CAVE_DOT_COLOR: [u8; 3] = [0x56, 0x5a, 0x60];
 const CORAL_DOT_COLOR: [u8; 3] = [0xff, 0x5a, 0xbe];
+const ICE_STRIPE_COLOR: [u8; 3] = [0xeb, 0xf8, 0xff];
 
 pub struct MapOptions {
     /// Blocks per pixel.
@@ -229,9 +230,6 @@ fn modifier_overlay(modifiers: Modifiers, x: usize, y: usize) -> Option<[u8; 3]>
     if let Some(color) = overview_modifier_overlay(modifiers, x, y) {
         return Some(color);
     }
-    if modifiers.contains(Modifiers::ICE) && (x + y) % 8 < 2 {
-        return Some([235, 248, 255]);
-    }
     if modifiers.contains(Modifiers::DESERT) && (x + 5 * y) % 11 < 2 {
         return Some([226, 200, 120]);
     }
@@ -241,19 +239,21 @@ fn modifier_overlay(modifiers: Modifiers, x: usize, y: usize) -> Option<[u8; 3]>
     None
 }
 
-/// Sparse overlays shared by the full classification and clean overview maps.
+/// Overlays shared by the full classification and clean overview maps.
 /// They only replace pixels already owned by a matching region; they never grow
-/// or fill its geometry. Cave dots sit on the normal river/lake/swamp colour so
-/// the water kind remains readable underneath the cave marker.
+/// or fill its geometry. Cave/coral dots and horizontal ice stripes sit on the
+/// normal water colour so the water kind remains readable underneath.
 fn overview_modifier_overlay(modifiers: Modifiers, x: usize, y: usize) -> Option<[u8; 3]> {
-    if x % 6 != 2 || y % 6 != 2 {
-        return None;
+    if x % 6 == 2 && y % 6 == 2 {
+        if modifiers.contains(Modifiers::CAVE) {
+            return Some(CAVE_DOT_COLOR);
+        }
+        if modifiers.contains(Modifiers::CORALS) {
+            return Some(CORAL_DOT_COLOR);
+        }
     }
-    if modifiers.contains(Modifiers::CAVE) {
-        return Some(CAVE_DOT_COLOR);
-    }
-    if modifiers.contains(Modifiers::CORALS) {
-        return Some(CORAL_DOT_COLOR);
+    if modifiers.contains(Modifiers::ICE) && y % 8 < 2 {
+        return Some(ICE_STRIPE_COLOR);
     }
     None
 }
@@ -861,17 +861,21 @@ fn inland_region_color(kind: WaterKind, modifiers: Modifiers) -> [u8; 3] {
 /// Paints the sea as a backdrop, then the inland water on top of it.
 ///
 /// Drawing order matters here and nowhere else: regions never overlap, but at
-/// eight blocks per pixel a river one chunk wide shares its pixel with the coast
-/// it runs into. Painting inland water last is what keeps it on the map.
+/// eight blocks per pixel several water kinds can share one output pixel. Lakes
+/// are painted first, then rivers, then swamps, so a mangrove-swamp pixel cannot
+/// be hidden by an adjacent lake. Inland water remains above the flat sea in the
+/// standalone inland view.
 fn paint_inland(canvas: &mut Canvas, regions: &[WaterRegion], p: &Projection, include_sea: bool) {
     // The combined view gives existing ocean pixels priority at shared coastal
     // pixels. The standalone inland view keeps its river-first presentation.
     let ocean_palette: Vec<_> = [Temperature::Warm, Temperature::Medium, Temperature::Cold]
         .into_iter().flat_map(|t| [ocean_color(t, false), ocean_color(t, true)]).collect();
-    for sea_pass in [true, false] {
-        if sea_pass && !include_sea { continue; }
+    for kind in [WaterKind::Sea, WaterKind::Lake, WaterKind::River, WaterKind::Swamp] {
+        if kind == WaterKind::Sea && !include_sea {
+            continue;
+        }
         for region in regions {
-            if (region.kind == WaterKind::Sea) != sea_pass {
+            if region.kind != kind {
                 continue;
             }
             let color = inland_region_color(region.kind, region.modifiers);
@@ -890,12 +894,13 @@ fn paint_inland(canvas: &mut Canvas, regions: &[WaterRegion], p: &Projection, in
     }
 }
 
-/// Add coral and underground-water markers without changing any base map shape.
+/// Add coral, underground-water and ice-cover markers without changing any base
+/// map shape.
 fn paint_overview_modifiers(canvas: &mut Canvas, regions: &[WaterRegion], p: &Projection) {
     for region in regions.iter().filter(|region| {
         region
             .modifiers
-            .intersects(Modifiers::CORALS | Modifiers::CAVE)
+            .intersects(Modifiers::CORALS | Modifiers::CAVE | Modifiers::ICE)
     }) {
         for run in &region.geometry.runs {
             let (xa, y) = p.px(run.x0, run.z);
@@ -929,6 +934,10 @@ fn inland_rows(regions: &[WaterRegion], blocks_per_pixel: u32) -> Vec<Row> {
         heading("OVERLAYS"),
         entry("CORALS", Swatch::Pattern(inland_color(WaterKind::Sea), Modifiers::CORALS)),
         entry(
+            "ICE COVER 50%+",
+            Swatch::Pattern(inland_color(WaterKind::Lake), Modifiers::ICE),
+        ),
+        entry(
             "CAVE WATER",
             Swatch::Pattern(inland_color(WaterKind::Lake), Modifiers::CAVE),
         ),
@@ -958,6 +967,10 @@ fn combined_rows(regions: &[WaterRegion], sea_level: i16, blocks_per_pixel: u32,
         entry("DESERT LAKE", Swatch::Color(inland_region_color(WaterKind::Lake, Modifiers::DESERT))),
         heading("OVERLAYS"),
         entry("CORALS", Swatch::Pattern(inland_color(WaterKind::Sea), Modifiers::CORALS)),
+        entry(
+            "ICE COVER 50%+",
+            Swatch::Pattern(inland_color(WaterKind::Lake), Modifiers::ICE),
+        ),
         entry(
             "CAVE WATER",
             Swatch::Pattern(inland_color(WaterKind::Lake), Modifiers::CAVE),
@@ -1309,7 +1322,37 @@ mod tests {
     }
 
     #[test]
-    fn overview_dots_are_sparse_and_cave_takes_priority() {
+    fn swamp_wins_when_lake_and_swamp_share_an_output_pixel() {
+        let p = Projection::new((0, 0, 15, 15), 8);
+        let mut swamp = region(1, WaterKind::Swamp, Temperature::Warm, Some(Depth::Shallow));
+        swamp.modifiers = Modifiers::MANGROVE;
+        swamp.geometry = RegionGeometry {
+            min_x: 0,
+            min_z: 0,
+            max_x: 0,
+            max_z: 0,
+            runs: vec![Run { z: 0, x0: 0, x1: 0 }],
+            column_count: 1,
+        };
+        let mut lake = region(2, WaterKind::Lake, Temperature::Medium, Some(Depth::Shallow));
+        lake.geometry = RegionGeometry {
+            min_x: 7,
+            min_z: 0,
+            max_x: 7,
+            max_z: 0,
+            runs: vec![Run { z: 0, x0: 7, x1: 7 }],
+            column_count: 1,
+        };
+
+        // Deliberately put the lake last. Kind-priority painting, rather than the
+        // input order, must decide the shared 8x8 map pixel.
+        let mut canvas = Canvas::new(2, 2, BG_LAND);
+        paint_inland(&mut canvas, &[swamp, lake], &p, false);
+        assert_eq!(&canvas.px[0..3], &inland_color(WaterKind::Swamp));
+    }
+
+    #[test]
+    fn overview_patterns_are_sparse_horizontal_and_cave_takes_priority() {
         assert_eq!(
             overview_modifier_overlay(Modifiers::CORALS, 2, 2),
             Some(CORAL_DOT_COLOR)
@@ -1324,6 +1367,19 @@ mod tests {
         );
         assert_eq!(overview_modifier_overlay(Modifiers::CORALS, 3, 2), None);
         assert_eq!(overview_modifier_overlay(Modifiers::CORALS, 2, 3), None);
+        for x in 0..16 {
+            assert_eq!(
+                overview_modifier_overlay(Modifiers::ICE, x, 0),
+                Some(ICE_STRIPE_COLOR),
+                "ice stripe must span the whole row"
+            );
+            assert_eq!(overview_modifier_overlay(Modifiers::ICE, x, 2), None);
+        }
+        assert_eq!(
+            overview_modifier_overlay(Modifiers::ICE | Modifiers::CAVE, 2, 2),
+            Some(CAVE_DOT_COLOR),
+            "cave dots must remain visible over ice"
+        );
         assert_eq!(overview_modifier_overlay(Modifiers::empty(), 2, 2), None);
     }
 
@@ -1354,6 +1410,40 @@ mod tests {
             assert_eq!(pixel(3, 2), inland_color(kind), "overlay is not sparse");
             assert_eq!(pixel(2, 1), BG_LAND, "pixel outside the run was marked");
         }
+    }
+
+    #[test]
+    fn ice_overlay_is_horizontal_and_stays_inside_region_geometry() {
+        let p = Projection::new((0, 0, 9, 9), 1);
+        let mut marked = region(0, WaterKind::Lake, Temperature::Cold, Some(Depth::Shallow));
+        marked.modifiers = Modifiers::ICE;
+        marked.geometry = RegionGeometry {
+            min_x: 2,
+            min_z: 0,
+            max_x: 6,
+            max_z: 2,
+            runs: vec![
+                Run { z: 0, x0: 2, x1: 6 },
+                Run { z: 1, x0: 2, x1: 6 },
+                Run { z: 2, x0: 2, x1: 6 },
+            ],
+            column_count: 15,
+        };
+        let mut canvas = Canvas::new(10, 10, BG_LAND);
+        paint_inland(&mut canvas, std::slice::from_ref(&marked), &p, true);
+        paint_overview_modifiers(&mut canvas, &[marked], &p);
+
+        let pixel = |x: usize, y: usize| {
+            let i = (y * canvas.w + x) * 3;
+            [canvas.px[i], canvas.px[i + 1], canvas.px[i + 2]]
+        };
+        for x in 2..=6 {
+            assert_eq!(pixel(x, 0), ICE_STRIPE_COLOR);
+            assert_eq!(pixel(x, 1), ICE_STRIPE_COLOR);
+            assert_eq!(pixel(x, 2), inland_color(WaterKind::Lake));
+        }
+        assert_eq!(pixel(1, 0), BG_LAND, "stripe grew outside the region");
+        assert_eq!(pixel(7, 1), BG_LAND, "stripe grew outside the region");
     }
 
     #[test]
