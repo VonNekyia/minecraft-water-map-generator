@@ -39,7 +39,8 @@ preserve exactly the same 351,359,105 retained water columns; short channels and
 attribute fragments can now be smaller than the earlier 2,000-column cleanup floor.
 The height rule also admits shallow covered ponds; the area floor
 removes small isolated ones. Desert rivers use light sand; desert lakes use a
-muted orange-red for clearer separation. Rivers use a soft light blue.
+muted orange-red for clearer separation. Rivers use pale blue-green; lakes use a
+soft light blue.
 
 ### Combined ocean, river and lake map
 
@@ -246,7 +247,7 @@ validation aids:
 | Warm ocean | `#4e5d7c` | `#2b3752` |
 | Normal ocean | `#12326e` | `#091937` |
 | Cold ocean | `#48659c` | `#2b3d5e` |
-| River / lake | River `#64bed3` | Lake `#99cacd` |
+| River / lake | River `#99cacd` | Lake `#64bed3` |
 | Desert river / lake | River `#ead7a0` | Lake `#d8a27d` |
 | Swamp | Light brown `#c4a484` | `#c4a484` |
 

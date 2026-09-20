@@ -15,14 +15,20 @@ import struct
 import numpy as np
 from PIL import Image
 
-RIVER = ((79, 196, 193), (58, 225, 205), (234, 215, 160))
-LAKE = ((153, 202, 205), (203, 185, 132))
+PALETTES = {
+    "current": (((153, 202, 205), (234, 215, 160)), ((100, 190, 211), (216, 162, 125))),
+    "legacy": (
+        ((100, 190, 211), (79, 196, 193), (58, 225, 205), (234, 215, 160)),
+        ((153, 202, 205), (216, 162, 125), (203, 185, 132)),
+    ),
+}
 DEFAULT_RIVER_BRUSH = (58, 225, 205)
+DEFAULT_LAKE_BRUSH = (153, 202, 205)
 
 
-def classes(rgb):
+def classes(rgb, palette="current"):
     result = np.zeros(rgb.shape[:2], dtype=np.uint8)
-    for label, colors in ((1, RIVER), (2, LAKE)):
+    for label, colors in enumerate(PALETTES[palette], start=1):
         for color in colors:
             result[np.all(rgb == color, axis=2)] = label
     return result
@@ -58,7 +64,9 @@ def main():
     parser.add_argument("--reference-data", type=Path, required=True, help="water_regions.bin for the reference map")
     parser.add_argument("--map-scale", type=int, default=8)
     parser.add_argument("--river-color", type=brush_color, default=DEFAULT_RIVER_BRUSH, help="river brush RGB, default 3ae1cd")
-    parser.add_argument("--lake-color", type=brush_color, default=LAKE[0], help="lake brush RGB, default 99cacd")
+    parser.add_argument("--lake-color", type=brush_color, default=DEFAULT_LAKE_BRUSH, help="lake brush RGB, default 99cacd")
+    parser.add_argument("--reference-palette", choices=PALETTES, default="current", help="reference PNG palette; legacy for maps from before the river/lake color swap")
+    parser.add_argument("--map-palette", choices=PALETTES, default="current", help="candidate PNG palette; applies to every --map")
     parser.add_argument("--map", type=Path, action="append", required=True, help="candidate combined PNG; repeat to compare")
     parser.add_argument("--output", type=Path, help="optional JSON report")
     args = parser.parse_args()
@@ -73,7 +81,7 @@ def main():
     x0, z0, x1, z1 = struct.unpack_from(">4i", header, 24)
     width, height = (x1-x0)//args.map_scale+1, (z1-z0)//args.map_scale+1
     with Image.open(args.reference_map) as image:
-        reference = classes(np.array(image.convert("RGB")))
+        reference = classes(np.array(image.convert("RGB")), args.reference_palette)
     panel = reference.shape[1] - width
     if panel < 0 or reference.shape[0] != height:
         parser.error("reference PNG dimensions disagree with the binary bounds and scale")
@@ -94,13 +102,14 @@ def main():
         "river_labels": int((truth == 1).sum()), "lake_labels": int((truth == 2).sum()),
         "ignored_paint_outside_inland_water": int(((paint > 0) & ~valid).sum()),
         "brush_colors": {"river": args.river_color, "lake": args.lake_color},
+        "map_palettes": {"reference": args.reference_palette, "candidates": args.map_palette},
         "projection": {"legend_width": panel, "blocks_per_pixel": args.map_scale, "world_bounds": [x0,z0,x1,z1]},
         "method": "Fixed reference river/lake pixels only. No alignment changes, dilation, filled annotations or background agreement. Missing candidate classes count as errors. Adjacent trace pixels are correlated; this is annotation agreement, not independent whole-world accuracy.",
         "results": [],
     }
     for path in args.map:
         with Image.open(path) as image:
-            candidate = classes(np.array(image.convert("RGB")))
+            candidate = classes(np.array(image.convert("RGB")), args.map_palette)
         if candidate.shape != reference.shape:
             parser.error(f"candidate resolution differs: {path}")
         report["results"].append({"map": path.as_posix(), **metrics(truth, candidate[valid])})

@@ -33,7 +33,7 @@ const PANEL_BG: [u8; 3] = [8, 8, 12];
 const TEXT: [u8; 3] = [232, 232, 236];
 const TEXT_DIM: [u8; 3] = [150, 152, 160];
 const HEADER: [u8; 3] = [126, 198, 255];
-const RIVER_COLOR: [u8; 3] = [0x64, 0xbe, 0xd3];
+const RIVER_COLOR: [u8; 3] = [0x99, 0xca, 0xcd];
 const SWAMP_COLOR: [u8; 3] = [0xc4, 0xa4, 0x84];
 const CAVE_DOT_COLOR: [u8; 3] = [0x44, 0x48, 0x4f];
 const CORAL_DOT_COLOR: [u8; 3] = [0xff, 0x5a, 0xbe];
@@ -846,7 +846,7 @@ fn inland_color(kind: WaterKind) -> [u8; 3] {
     match kind {
         WaterKind::Sea => [36, 112, 120],
         WaterKind::River => RIVER_COLOR,
-        WaterKind::Lake => [0x99, 0xca, 0xcd],
+        WaterKind::Lake => [0x64, 0xbe, 0xd3],
         WaterKind::Swamp => SWAMP_COLOR,
     }
 }

@@ -315,3 +315,9 @@ transparent or black. Without colour options, the utility accepts the original
 river `#3ae1cd` and lake `#99cacd` brushes. Repeat `--map` to compare versions
 against the same reference water. These options change annotation decoding,
 not the exported map palette.
+
+PNG decoding defaults to the current palette: river `#99cacd`, lake `#64bed3`.
+For maps generated before this colour swap, use `--reference-palette legacy`
+and/or `--map-palette legacy` as appropriate. Annotation brush colours stay
+independent of these settings. All candidates in one invocation use the same
+map palette; score separate groups when comparing exports with different palettes.
