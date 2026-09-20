@@ -33,9 +33,9 @@ const PANEL_BG: [u8; 3] = [8, 8, 12];
 const TEXT: [u8; 3] = [232, 232, 236];
 const TEXT_DIM: [u8; 3] = [150, 152, 160];
 const HEADER: [u8; 3] = [126, 198, 255];
-const RIVER_COLOR: [u8; 3] = [0x4f, 0xc4, 0xc1];
+const RIVER_COLOR: [u8; 3] = [0x64, 0xbe, 0xd3];
 const SWAMP_COLOR: [u8; 3] = [0xc4, 0xa4, 0x84];
-const CAVE_DOT_COLOR: [u8; 3] = [0x56, 0x5a, 0x60];
+const CAVE_DOT_COLOR: [u8; 3] = [0x44, 0x48, 0x4f];
 const CORAL_DOT_COLOR: [u8; 3] = [0xff, 0x5a, 0xbe];
 const ICE_STRIPE_COLOR: [u8; 3] = [0xeb, 0xf8, 0xff];
 
@@ -244,13 +244,16 @@ fn modifier_overlay(modifiers: Modifiers, x: usize, y: usize) -> Option<[u8; 3]>
 /// or fill its geometry. Cave/coral dots and horizontal ice stripes sit on the
 /// normal water colour so the water kind remains readable underneath.
 fn overview_modifier_overlay(modifiers: Modifiers, x: usize, y: usize) -> Option<[u8; 3]> {
-    if x % 6 == 2 && y % 6 == 2 {
-        if modifiers.contains(Modifiers::CAVE) {
-            return Some(CAVE_DOT_COLOR);
-        }
-        if modifiers.contains(Modifiers::CORALS) {
-            return Some(CORAL_DOT_COLOR);
-        }
+    // Two-pixel cave dots survive downscaling in the README preview. The base
+    // water colour still occupies 84% of a large cave region.
+    if modifiers.contains(Modifiers::CAVE)
+        && (2..4).contains(&(x % 5))
+        && (2..4).contains(&(y % 5))
+    {
+        return Some(CAVE_DOT_COLOR);
+    }
+    if modifiers.contains(Modifiers::CORALS) && x % 6 == 2 && y % 6 == 2 {
+        return Some(CORAL_DOT_COLOR);
     }
     if modifiers.contains(Modifiers::ICE) && y % 8 < 2 {
         return Some(ICE_STRIPE_COLOR);
@@ -853,7 +856,7 @@ fn inland_color(kind: WaterKind) -> [u8; 3] {
 fn inland_region_color(kind: WaterKind, modifiers: Modifiers) -> [u8; 3] {
     match (kind, modifiers.contains(Modifiers::DESERT)) {
         (WaterKind::River, true) => [0xea, 0xd7, 0xa0],
-        (WaterKind::Lake, true) => [0xcb, 0xb9, 0x84],
+        (WaterKind::Lake, true) => [0xd8, 0xa2, 0x7d],
         _ => inland_color(kind),
     }
 }
@@ -1365,6 +1368,9 @@ mod tests {
             overview_modifier_overlay(Modifiers::CORALS | Modifiers::CAVE, 2, 2),
             Some(CAVE_DOT_COLOR)
         );
+        assert_eq!(overview_modifier_overlay(Modifiers::CAVE, 3, 2), Some(CAVE_DOT_COLOR));
+        assert_eq!(overview_modifier_overlay(Modifiers::CAVE, 2, 3), Some(CAVE_DOT_COLOR));
+        assert_eq!(overview_modifier_overlay(Modifiers::CAVE, 4, 2), None);
         assert_eq!(overview_modifier_overlay(Modifiers::CORALS, 3, 2), None);
         assert_eq!(overview_modifier_overlay(Modifiers::CORALS, 2, 3), None);
         for x in 0..16 {
@@ -1407,7 +1413,7 @@ mod tests {
             };
             assert_eq!(pixel(2, 2), CAVE_DOT_COLOR);
             assert_eq!(pixel(1, 2), inland_color(kind), "{kind:?} base was hidden");
-            assert_eq!(pixel(3, 2), inland_color(kind), "overlay is not sparse");
+            assert_eq!(pixel(4, 2), inland_color(kind), "overlay is not sparse");
             assert_eq!(pixel(2, 1), BG_LAND, "pixel outside the run was marked");
         }
     }

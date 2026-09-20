@@ -28,8 +28,8 @@ This is agreement on the tuning mask, not a whole-world accuracy claim. See the
 [settings, evaluation and limitations](docs/lake-detection.md#mask-calibration).
 Modifier textures appear on `debug/water_map.png`; the clean inland and combined
 overviews also mark coral regions with magenta dots, underground cave water with
-dark-grey dots, and regions whose measured water surface is at least 50% ice-covered
-with white horizontal stripes. These texture overlays replace pixels only inside
+larger dark-grey dots, and regions whose measured water surface is at least 50%
+ice-covered with white horizontal stripes. These texture overlays replace pixels only inside
 the original region geometry, while the normal river, lake or swamp colour remains
 visible underneath. This height-filtered sample has no `CAVE`
 regions because covered water above the cutoff remains part of the surface
@@ -38,7 +38,8 @@ The earlier classifier produced 2,336 regions. The additional lake/channel cuts
 preserve exactly the same 351,359,105 retained water columns; short channels and
 attribute fragments can now be smaller than the earlier 2,000-column cleanup floor.
 The height rule also admits shallow covered ponds; the area floor
-removes small isolated ones. Desert rivers and lakes use lighter sand colours.
+removes small isolated ones. Desert rivers use light sand; desert lakes use a
+muted orange-red for clearer separation. Rivers use a soft light blue.
 
 ### Combined ocean, river and lake map
 
@@ -245,8 +246,8 @@ validation aids:
 | Warm ocean | `#4e5d7c` | `#2b3752` |
 | Normal ocean | `#12326e` | `#091937` |
 | Cold ocean | `#48659c` | `#2b3d5e` |
-| River / lake | River `#4fc4c1` | Lake `#99cacd` |
-| Desert river / lake | River `#ead7a0` | Lake `#cbb984` |
+| River / lake | River `#64bed3` | Lake `#99cacd` |
+| Desert river / lake | River `#ead7a0` | Lake `#d8a27d` |
 | Swamp | Light brown `#c4a484` | `#c4a484` |
 
 Desert colours use the region's `DESERT` modifier. Swamps use light brown.
@@ -804,14 +805,17 @@ modded biome still lands somewhere sensible. `--debug` reports any biome name th
 registry did not know.
 
 The desert map category is limited to biome names containing `desert` or
-`canyon`. Savannas, badlands, shrubland, steppe and other dry terrain do not qualify
-on their own. Rainfall and temperature do not add biomes to this category.
+`canyon`, plus vanilla `badlands`, `eroded_badlands` and `wooded_badlands`.
+Savannas, modded snowy/savanna badlands, shrubland, steppe and other dry terrain
+do not qualify on their own. Rainfall and temperature do not add biomes to this
+category.
 
 River biomes can keep a neutral name even inside a canyon. The scanner therefore
-records desert/canyon surface-biome cells in all chunks, including chunks with no
-water. Inland regions also receive desert/canyon evidence from banks within four biome
-cells (16 blocks, including diagonals), across chunk and region-file boundaries.
-At least 40% of a region's columns must have direct or nearby desert/canyon evidence
+records desert/canyon/vanilla-badlands surface-biome cells in all chunks, including
+chunks with no water. Inland regions also receive that evidence from banks within
+four biome cells (16 blocks, including diagonals), across chunk and region-file
+boundaries.
+At least 40% of a region's columns must have direct or nearby dry-biome evidence
 to receive `DESERT`. This changes the modifier without splitting regions or
 expanding water outlines. Tune `DRYLAND_CELL_RADIUS` and `DESERT_MIN_SHARE` in
 `src/config.rs` to adjust the bank distance and required share.
