@@ -897,22 +897,61 @@ fn paint_inland(canvas: &mut Canvas, regions: &[WaterRegion], p: &Projection, in
     }
 }
 
-/// Add coral, underground-water and ice-cover markers without changing any base
-/// map shape.
-fn paint_overview_modifiers(canvas: &mut Canvas, regions: &[WaterRegion], p: &Projection) {
-    for region in regions.iter().filter(|region| {
-        region
-            .modifiers
-            .intersects(Modifiers::CORALS | Modifiers::CAVE | Modifiers::ICE)
-    }) {
+/// Add textures only to the retained water visible in the overview. Roof cover
+/// comes from exact scanned columns, independently of classification/modifiers.
+/// At reduced resolution an exposed column suppresses roof dots on its shared
+/// water pixel; a tunnel cannot paint dots onto the visible river at its mouth.
+fn paint_overview_modifiers(
+    canvas: &mut Canvas,
+    grid: &WorldGrid,
+    regions: &[WaterRegion],
+    p: &Projection,
+) {
+    const COVERED: u8 = 1 << 6;
+    const EXPOSED: u8 = 1 << 7;
+    let mut evidence = vec![0u8; canvas.w * canvas.h];
+    let ocean_palette: Vec<_> = [Temperature::Warm, Temperature::Medium, Temperature::Cold]
+        .into_iter().flat_map(|t| [ocean_color(t, false), ocean_color(t, true)]).collect();
+    for region in regions {
+        let base = inland_region_color(region.kind, region.modifiers);
+        let modifiers = (region.modifiers & (Modifiers::CORALS | Modifiers::ICE)).bits() as u8;
         for run in &region.geometry.runs {
             let (xa, y) = p.px(run.x0, run.z);
             let (xb, _) = p.px(run.x1, run.z);
             for x in xa..=xb {
-                if let Some(color) = overview_modifier_overlay(region.modifiers, x, y) {
-                    canvas.set(x, y, color);
+                let i = y * canvas.w + x;
+                let pixel = &canvas.px[i * 3..i * 3 + 3];
+                // Mirror the base-layer priority, including the cleaned ocean
+                // colours in the combined map. Hidden inland water contributes
+                // no texture to an ocean pixel (and vice versa).
+                if pixel != base && !(region.kind == WaterKind::Sea
+                    && ocean_palette.iter().any(|color| pixel == color)) {
+                    continue;
+                }
+                evidence[i] |= modifiers;
+                if overview_modifier_overlay(Modifiers::CAVE, x, y).is_none()
+                    || evidence[i] & EXPOSED != 0 {
+                    continue;
+                }
+                let left = p.world_x(x);
+                for wx in run.x0.max(left)..=run.x1.min(left + p.scale - 1) {
+                    if grid.is_covered_water(wx, run.z) {
+                        evidence[i] |= COVERED;
+                    } else {
+                        evidence[i] |= EXPOSED;
+                        break;
+                    }
                 }
             }
+        }
+    }
+    for (i, flags) in evidence.into_iter().enumerate() {
+        let mut modifiers = Modifiers::from_bits_truncate(u16::from(flags & !(COVERED | EXPOSED)));
+        if flags & (COVERED | EXPOSED) == COVERED {
+            modifiers |= Modifiers::CAVE;
+        }
+        if let Some(color) = overview_modifier_overlay(modifiers, i % canvas.w, i / canvas.w) {
+            canvas.set(i % canvas.w, i / canvas.w, color);
         }
     }
 }
@@ -921,7 +960,7 @@ fn inland_rows(regions: &[WaterRegion], blocks_per_pixel: u32) -> Vec<Row> {
     let count = |kind: WaterKind| {
         regions
             .iter()
-            .filter(|r| r.kind == kind && !r.modifiers.contains(Modifiers::CAVE))
+            .filter(|r| r.kind == kind)
             .count()
     };
     vec![
@@ -1084,14 +1123,14 @@ pub fn render(
     let mut inland = Canvas::new(panel + p.w, height, BG_VOID);
     paint_land(&mut inland, grid, &p);
     paint_inland(&mut inland, regions, &p, true);
-    paint_overview_modifiers(&mut inland, regions, &p);
+    paint_overview_modifiers(&mut inland, grid, regions, &p);
     inland_legend.draw(&mut inland, panel);
     let e = inland.write_png(&dir.join("water_inland_map.png"))?;
 
     // Reuse the cleaned ocean layer, preserving its pixels when inland water
     // shares a coastal pixel. The combined view gives ocean zones priority.
     paint_inland(&mut ocean, regions, &p, false);
-    paint_overview_modifiers(&mut ocean, regions, &p);
+    paint_overview_modifiers(&mut ocean, grid, regions, &p);
     combined_legend.draw(&mut ocean, panel);
     let f = ocean.write_png(&dir.join("water_combined_map.png"))?;
 
@@ -1101,6 +1140,20 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cover_grid(columns: &[(usize, usize, bool)]) -> WorldGrid {
+        use crate::water::grid::{ChunkWater, RegionWater, REGION_CHUNKS};
+        let mut chunks = std::collections::BTreeMap::new();
+        for &(x, z, covered) in columns {
+            let chunk: &mut ChunkWater = chunks.entry((x / 16, z / 16)).or_default();
+            chunk.set(x & 15, z & 15);
+            chunk.water_cols += 1;
+            if covered { chunk.set_covered(x & 15, z & 15); }
+        }
+        let mut tile = RegionWater::new(0, 0);
+        for ((cx, cz), chunk) in chunks { tile.insert(cz * REGION_CHUNKS + cx, chunk); }
+        WorldGrid::build(vec![tile])
+    }
 
     fn region(id: u32, kind: WaterKind, t: Temperature, d: Option<Depth>) -> WaterRegion {
         WaterRegion {
@@ -1392,9 +1445,11 @@ mod tests {
     #[test]
     fn cave_overlay_keeps_the_water_kind_visible_under_sparse_dots() {
         let p = Projection::new((0, 0, 7, 7), 1);
+        let grid = cover_grid(&[(1, 2, true), (2, 2, true), (3, 2, true), (4, 2, true),
+            (7, 7, true)]);
         for kind in [WaterKind::River, WaterKind::Lake, WaterKind::Swamp] {
             let mut marked = region(0, kind, Temperature::Medium, Some(Depth::Shallow));
-            marked.modifiers = Modifiers::CAVE;
+            marked.modifiers = Modifiers::DESERT;
             marked.geometry = RegionGeometry {
                 min_x: 1,
                 min_z: 2,
@@ -1404,18 +1459,57 @@ mod tests {
                 column_count: 4,
             };
             let mut canvas = Canvas::new(8, 8, BG_LAND);
+            let before = format!("{marked:?}");
             paint_inland(&mut canvas, std::slice::from_ref(&marked), &p, true);
-            paint_overview_modifiers(&mut canvas, &[marked], &p);
+            paint_overview_modifiers(&mut canvas, &grid, std::slice::from_ref(&marked), &p);
+            assert_eq!(format!("{marked:?}"), before, "cover must not change classification or geometry");
 
             let pixel = |x: usize, y: usize| {
                 let i = (y * canvas.w + x) * 3;
                 [canvas.px[i], canvas.px[i + 1], canvas.px[i + 2]]
             };
             assert_eq!(pixel(2, 2), CAVE_DOT_COLOR);
-            assert_eq!(pixel(1, 2), inland_color(kind), "{kind:?} base was hidden");
-            assert_eq!(pixel(4, 2), inland_color(kind), "overlay is not sparse");
+            assert_eq!(pixel(1, 2), inland_region_color(kind, Modifiers::DESERT), "{kind:?} base was hidden");
+            assert_eq!(pixel(4, 2), inland_region_color(kind, Modifiers::DESERT), "overlay is not sparse");
             assert_eq!(pixel(2, 1), BG_LAND, "pixel outside the run was marked");
+            assert_eq!(pixel(7, 7), BG_LAND, "discarded water must not acquire a texture");
         }
+    }
+
+    #[test]
+    fn cave_overlay_never_marks_open_water_or_a_higher_priority_surface() {
+        let p = Projection::new((0, 0, 31, 31), 8);
+        let grid = cover_grid(&[(16, 16, true), (17, 16, false)]);
+        let mut lake = region(0, WaterKind::Lake, Temperature::Medium, Some(Depth::Shallow));
+        lake.modifiers = Modifiers::CAVE;
+        lake.geometry = RegionGeometry {
+            min_x: 16, min_z: 16, max_x: 17, max_z: 16, column_count: 2,
+            runs: vec![Run { z: 16, x0: 16, x1: 17 }],
+        };
+        let mut canvas = Canvas::new(4, 4, BG_LAND);
+        paint_inland(&mut canvas, std::slice::from_ref(&lake), &p, true);
+        paint_overview_modifiers(&mut canvas, &grid, std::slice::from_ref(&lake), &p);
+        let i = (2 * canvas.w + 2) * 3;
+        assert_eq!(&canvas.px[i..i + 3], &inland_color(WaterKind::Lake),
+            "a region-wide CAVE bit cannot paint its exposed columns");
+
+        let mut river = lake.clone();
+        river.kind = WaterKind::River;
+        river.modifiers = Modifiers::empty();
+        river.geometry.runs[0].x0 = 17;
+        lake.geometry.runs[0].x1 = 16;
+        let regions = [lake, river];
+        paint_inland(&mut canvas, &regions, &p, true);
+        paint_overview_modifiers(&mut canvas, &grid, &regions, &p);
+        assert_eq!(&canvas.px[i..i + 3], &inland_color(WaterKind::River),
+            "a hidden covered lake cannot mark the exposed river above it");
+
+        let ocean = ocean_color(Temperature::Warm, false);
+        canvas.set(2, 2, ocean);
+        paint_inland(&mut canvas, &regions, &p, false);
+        paint_overview_modifiers(&mut canvas, &grid, &regions, &p);
+        assert_eq!(&canvas.px[i..i + 3], &ocean,
+            "inland cave water cannot mark an ocean-priority coastal pixel");
     }
 
     #[test]
@@ -1437,7 +1531,7 @@ mod tests {
         };
         let mut canvas = Canvas::new(10, 10, BG_LAND);
         paint_inland(&mut canvas, std::slice::from_ref(&marked), &p, true);
-        paint_overview_modifiers(&mut canvas, &[marked], &p);
+        paint_overview_modifiers(&mut canvas, &WorldGrid::build(Vec::new()), &[marked], &p);
 
         let pixel = |x: usize, y: usize| {
             let i = (y * canvas.w + x) * 3;

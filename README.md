@@ -20,20 +20,22 @@ the desert/canyon/vanilla-badlands modifier applies to 149 regions. Broad-core s
 lake basins from wide rivers, with a compactness exception for small lakes.
 Retained bodies without an ocean path become lakes up to 5,000 blocks; larger
 closed bodies up to 500,000 blocks also require a compact, non-channel-like shape.
-On 498,875 manually annotated water pixels, the sample map matches 90.47% of river
+On 498,875 manually annotated water pixels, the untextured classification matches 90.47% of river
 marks and 91.22% of lake marks (90.75% overall, up from 82.74% on the same mask).
 Both class recalls exceed 90%; the requested 95% overall target is not yet met.
 Paint over non-water, oceans and swamps is excluded.
 This is agreement on the tuning mask, not a whole-world accuracy claim. See the
 [settings, evaluation and limitations](docs/lake-detection.md#mask-calibration).
 Modifier textures appear on `debug/water_map.png`; the clean inland and combined
-overviews also mark coral regions with magenta dots, underground cave water with
-larger dark-grey dots, and regions whose measured water surface is at least 50%
-ice-covered with white horizontal stripes. These texture overlays replace pixels only inside
+overviews mark coral regions with magenta dots, measured roofed water with
+dark-grey dots, and regions whose measured water surface is at least 50%
+ice-covered with white horizontal stripes. These textures replace pixels only inside
 the original region geometry, while the normal river, lake or swamp colour remains
-visible underneath. This height-filtered sample has no `CAVE`
-regions because covered water above the cutoff remains part of the surface
-network; omit the height filter to produce separately classified cave water.
+visible underneath. Roof cover is recorded separately from classification:
+covered rivers remain rivers, and desert lakes retain their desert modifier.
+The height cutoff is enabled by default. Region-level `CAVE` metadata is assigned
+after lake reconstruction when at least 50% of the retained water is covered;
+the overview dots use the actual covered columns rather than filling that whole region.
 The earlier classifier produced 2,336 regions. The additional lake/channel cuts
 preserve exactly the same 351,359,105 retained water columns; short channels and
 attribute fragments can now be smaller than the earlier 2,000-column cleanup floor.
@@ -61,9 +63,9 @@ soft light blue.
 </details>
 
 <details>
-<summary>Coral and cave overlays with unrestricted cave scanning</summary>
+<summary>Desert river and lake detail with measured roof cover</summary>
 
-![Minecraft water map with magenta coral dots, dark-grey cave-water dots and white horizontal ice stripes](docs/images/minecraft-coral-cave-map.png)
+![Desert lake and rivers retaining their sand and orange colours beneath dark-grey roof-cover dots](docs/images/minecraft-coral-cave-map.png)
 
 </details>
 
@@ -133,7 +135,7 @@ the region is a swamp. Mud beneath source water contributes to the measured
 depth. Dry `packed_mud`, `mud_bricks` and `muddy_mangrove_roots` do not count
 unless waterlogged.
 
-Use `--max-below-sea-level 10`, as in the examples, to retain water whose
+The default `--max-below-sea-level 10`, also explicit in the examples, retains water whose
 **topmost water block Y is at least `sea_level - 10`**. At sea level 63 this means
 Y=53 is included and Y=52 is excluded. The cutoff applies to each column before
 4x4 averaging, region connectivity or merging. It uses the water surface, not the
@@ -143,14 +145,18 @@ This mode searches beneath terrain and keeps covered rivers and other qualifying
 water at or above the cutoff. Retained covered water participates in normal
 biome/shape classification and is shown in the maps; it is not forced into the
 `cave` lake class or hidden merely because it has a roof. Height alone also keeps
-any shallow underground pond above the cutoff. The scanner first detects sea
-level from exposed water, then rescans with the height rule. `--sea-level` can
+any shallow underground pond above the cutoff. Roof cover is measured separately
+and adds texture and final `CAVE` metadata without participating in region
+splitting, merging, lake reconstruction or desert classification. The scanner
+first detects sea level from exposed water, then rescans with the height rule. `--sea-level` can
 override the detected level.
 
 `--no-caves` is a separate, stricter option that excludes **all** covered water,
 including rivers through mountains. It cannot be combined with the height rule.
-With neither option, the original cave scan and cave-modifier classification are
-available. Flowing water is excluded in every mode. Ice, snow and lily pads remain
+The legacy unrestricted scan is available only with `--include-deep-caves`.
+That diagnostic mode includes deep aquifers and forces roofed water into cave
+lake groups, so it produces a different classification and is not an overlay
+toggle. Flowing water is excluded in every mode. Ice, snow and lily pads remain
 recognized as surface covers.
 
 ## Usage
@@ -179,9 +185,10 @@ Options:
 | `--min-river-merge <n>` | merge river regions smaller than N columns into adjoining rivers, default 20000; 0 disables this extra pass |
 | `--min-sea-merge <n>` | merge actual sea regions smaller than N columns into adjoining sea regions, default 10000; 0 disables this pass |
 | `--ocean-map-min-area <n>` | minimum ocean colour-patch area in the overview, default 10000; 0 disables the visual sieve |
-| `--max-below-sea-level <n>` | retain water surfaces at or above sea level minus N, including covered rivers; off unless specified |
+| `--max-below-sea-level <n>` | retain water surfaces at or above sea level minus N, including covered rivers; default 10 |
 | `--no-caves` | skip all water that cannot see the sky; incompatible with the height rule |
-| `--min-cave-body <n>` | smallest cave pool to report, default 4000 columns |
+| `--include-deep-caves` | explicitly use the legacy unrestricted cave scan; incompatible with the height rule and `--no-caves` |
+| `--min-cave-body <n>` | smallest cave pool in legacy unrestricted mode, default 4000 columns; does not filter covered river pieces in normal mode |
 | `--min-sea-body <n>` | connected ocean-biome columns needed to be a sea, default 2 000 000 |
 
 Output:
@@ -281,7 +288,8 @@ NBT parsing is streaming and allocation free: names and packed `long[]` payloads
 are addressed in place in the decompressed chunk buffer, and everything the
 scanner does not need is skipped with a length jump.
 
-Each chunk contributes a 256-bit water mask plus 16 aggregated 4x4 cells - the
+Each chunk contributes a 256-bit water mask, a separate 256-bit roof-cover mask,
+and 16 aggregated 4x4 cells - the
 resolution Minecraft stores biomes at. For a 30 000 x 25 000 block world that is a
 few hundred MiB instead of several hundred GiB.
 
@@ -409,8 +417,9 @@ whole world, and run through a majority filter twice:
 Each filter is one round of 3x3 majority voting: a cell that disagrees with most of
 its neighbours takes their value instead. Only water cells vote, so a real river
 four blocks wide running through dry land has no dissenting neighbours to
-overrule it, and cave water never votes or changes - whether water can see the sky
-is measured, not inferred, so no neighbourhood should overturn it.
+overrule it. In the default height-filtered mode, roof cover is kept outside this
+classification field. In legacy unrestricted mode, cave water never votes or
+changes. Neither mode lets a neighbourhood overwrite the measured roof-cover mask.
 
 Measured on the 30 GB world, checking every small (200-3000 column) river or lake
 region from a run with the filters disabled against the same point in a filtered
@@ -438,7 +447,8 @@ along a river become river rather than the other way round. Guard rails:
   meant every pond a river ran through was swallowed by it.
 * a piece below the minimum body size is the one exception - it cannot describe
   anything on its own, so it joins its best neighbour whatever that is
-* cave water never merges with water that can see the sky, in either direction
+* legacy cave groups never merge with exposed water; in normal height-filtered mode,
+  a roof does not introduce a merge boundary
 
 Bodies of water below `--min-water-body` columns are dropped entirely - a puddle
 of a few connected water blocks is not a body of water.
@@ -526,8 +536,9 @@ On the 30 GB reference world, bank repair finds 1,957 components covering
 after the combined shape and bank corrections. Existing performance tables
 below describe the earlier classification.
 
-Cave regions are exempt: an aquifer channel is narrow and winding like a river,
-but water with no sky over it is a cave pool and nothing else.
+Legacy unrestricted cave groups are exempt from shape repair. In the default
+height-filtered mode, covered channels participate in the same river/lake rules
+as exposed water; roof cover is added as metadata afterwards.
 
 ### 6. Temperature and depth
 
@@ -584,9 +595,12 @@ not, and the data says so.
   `eroded_badlands` and `wooded_badlands`. It retains its water kind; `desert` is
   a modifier. Other dry biomes such as savanna remain excluded.
 * `MANGROVE` - mangrove water. Also a modifier; the kind stays `swamp`.
-* `CAVE` - the water cannot see the sky. Cave regions are always `lake` - there is
-  no sea, river or swamp without a sky - and they never merge with water above
-  them, in either direction, even where they share an `x`/`z` column.
+* `CAVE` - at least 50% of the final region's retained water columns cannot see
+  the sky. In the default height-filtered mode this modifier is assigned after
+  classification and never changes kind, desert status or geometry. A covered
+  river remains `river`. Overview dots are clipped to measured covered water,
+  including covered parts of a mostly exposed region. The separate legacy
+  `--include-deep-caves` mode still classifies roofed pools as lakes.
 
 ### 8. Lake reconstruction at one-block resolution
 
@@ -676,13 +690,15 @@ the command pins every scan, merge and render parameter even where it now equals
 the default. Keep both together to reproduce the classification and image at
 this commit. Thread count affects speed only. The command uses a height cutoff
 and retains covered mountain rivers.
-For the unrestricted cave scan, remove `--max-below-sea-level 10`. The default
-`--min-cave-body 4000` filters small cave-classified pools, while dark-grey dots
-show the retained cave geometry over its normal water-kind colour, magenta dots
-show coral regions, and white horizontal stripes show water regions with at least
-50% measured ice cover on the inland and combined maps.
-Cave pools dominate the total region count in the example world, so filtering
-them has a much larger effect on the total than changing surface-water labels.
+Dark-grey dots now show measured roof cover with this same height-filtered
+command; an unrestricted scan is not needed to show them. At reduced resolution,
+dots require the retained visible water in the pixel to be covered, so exposed
+water at tunnel mouths is not marked. Magenta dots show coral regions and white
+stripes mark regions with at least 50% measured ice cover.
+For the legacy unrestricted scan, replace `--max-below-sea-level 10` with
+`--include-deep-caves`. Its `--min-cave-body 4000` filters small cave-classified
+pools. That mode adds deep water and changes the classification and connectivity;
+it does not reproduce the tuned sample map.
 
 | Setting | Detail-oriented | Balanced | Fewer regions |
 |---------|-----------------|----------|---------------|

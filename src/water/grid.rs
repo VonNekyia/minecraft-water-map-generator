@@ -1,7 +1,7 @@
 //! In-memory result of the chunk scan.
 //!
 //! The scan never keeps a per-block array of the whole world. Instead every chunk
-//! contributes a 256 bit water mask plus 16 aggregated 4x4 cells (the resolution
+//! contributes 256-bit water and roof-cover masks plus 16 aggregated 4x4 cells (the resolution
 //! Minecraft itself stores biomes at). For the 30k x 25k world this project was
 //! built against that is a few hundred MiB instead of several hundred GiB.
 
@@ -30,7 +30,8 @@ pub struct CellInfo {
     pub depth: u16,
     pub water_cols: u8,
     pub ice_cols: u8,
-    /// Water columns in this cell that cannot see the sky.
+    /// Roofed columns used by the legacy cave classifier. Zero in height mode;
+    /// `ChunkWater::covered_mask` always retains the physical roof evidence.
     pub cave_cols: u8,
 }
 
@@ -39,6 +40,10 @@ pub struct CellInfo {
 pub struct ChunkWater {
     /// One bit per column, bit index `z * 16 + x`.
     pub mask: [u64; 4],
+    /// Accepted water under a solid roof, independent of hydrological grouping.
+    /// This exact mask supplies map textures even when height-filtered water is
+    /// classified together with the adjoining exposed river or lake.
+    pub covered_mask: [u64; 4],
     pub cells: [CellInfo; 16],
     pub flags: ChunkFlags,
     pub water_cols: u16,
@@ -48,6 +53,7 @@ impl Default for ChunkWater {
     fn default() -> Self {
         ChunkWater {
             mask: [0; 4],
+            covered_mask: [0; 4],
             cells: [CellInfo::default(); 16],
             flags: ChunkFlags::empty(),
             water_cols: 0,
@@ -66,6 +72,18 @@ impl ChunkWater {
     pub fn get(&self, x: usize, z: usize) -> bool {
         let i = z * 16 + x;
         self.mask[i >> 6] & (1u64 << (i & 63)) != 0
+    }
+
+    #[inline]
+    pub fn set_covered(&mut self, x: usize, z: usize) {
+        let i = z * 16 + x;
+        self.covered_mask[i >> 6] |= 1u64 << (i & 63);
+    }
+
+    #[inline]
+    pub fn is_covered(&self, x: usize, z: usize) -> bool {
+        let i = z * 16 + x;
+        self.covered_mask[i >> 6] & (1u64 << (i & 63)) != 0
     }
 
     #[inline]
@@ -248,6 +266,14 @@ impl WorldGrid {
     pub fn cell_at(&self, x: i32, z: i32) -> Option<&CellInfo> {
         self.chunk_at(x, z)
             .map(|c| c.cell((x & 15) as usize, (z & 15) as usize))
+    }
+
+    /// Measured cover on an accepted water column; never creates water itself.
+    pub fn is_covered_water(&self, x: i32, z: i32) -> bool {
+        self.chunk_at(x, z).is_some_and(|chunk| {
+            let (lx, lz) = ((x & 15) as usize, (z & 15) as usize);
+            chunk.get(lx, lz) && chunk.is_covered(lx, lz)
+        })
     }
 
     /// Minimum valid non-water surface height in the containing 4x4 cell. This

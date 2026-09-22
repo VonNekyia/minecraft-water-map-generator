@@ -651,6 +651,7 @@ fn scan_caves(
                     let floor = probe_floor(buf, sections, cache, x, z, world_y);
                     let cell = (z >> 2) * 4 + (x >> 2);
                     cw.set(x, z);
+                    cw.set_covered(x, z);
                     cw.water_cols += 1;
                     cell_cols[cell] += 1;
                     // In height mode a roof is not a cave-classification boundary:
@@ -1236,6 +1237,10 @@ mod tests {
             assert_eq!(cw.water_cols, expected_columns);
             assert_eq!(stats.cave_columns, u64::from(roof_retained));
             assert_eq!(cw.cells[0].cave_cols, u8::from(cave_modifier));
+            assert_eq!(cw.is_covered(0, 0), roof_retained,
+                "height filtering must preserve the measured roof texture");
+            assert!(!cw.is_covered(1, 0), "flowing water gets no roof texture");
+            assert!(!cw.is_covered(2, 0), "open water gets no roof texture");
         }
     }
 }

@@ -97,15 +97,18 @@ struct Cli {
     #[arg(long, default_value_t = config::OCEAN_MAP_MIN_AREA)]
     ocean_map_min_area: u64,
 
-    /// Skip water that cannot see the sky. Without this, underground pools and
-    /// aquifers are reported as regions carrying the `cave` modifier.
+    /// Skip all water that cannot see the sky, including rivers under mountains.
     #[arg(long)]
     no_caves: bool,
 
     /// Keep water surfaces at or above sea level minus N, including covered rivers.
-    /// This replaces cave classification with the height rule; flowing water stays excluded.
+    /// Defaults to 10. Roof cover adds a modifier without changing the water kind.
     #[arg(long, conflicts_with = "no_caves")]
     max_below_sea_level: Option<u16>,
+
+    /// Opt into the legacy unrestricted scan, including deep aquifers classified as lakes.
+    #[arg(long, conflicts_with_all = ["no_caves", "max_below_sea_level"])]
+    include_deep_caves: bool,
 
     /// Smallest cave pool to report, in columns.
     /// Aquifers are far more numerous than lakes, so this usually wants to be
@@ -119,6 +122,16 @@ struct Cli {
     min_sea_body: u32,
 }
 
+impl Cli {
+    fn effective_max_below_sea_level(&self) -> Option<u16> {
+        if self.no_caves || self.include_deep_caves {
+            None
+        } else {
+            Some(self.max_below_sea_level.unwrap_or(10))
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     if let Err(e) = run(&cli) {
@@ -129,6 +142,7 @@ fn main() {
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
     let started = Instant::now();
+    let max_below_sea_level = cli.effective_max_below_sea_level();
     let lake_options: water::lakes::LakeOptions = match &cli.lake_config {
         Some(path) => serde_json::from_slice(&std::fs::read(path)?)?,
         None => water::lakes::LakeOptions::default(),
@@ -181,7 +195,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     println!("  river merge area {} columns", cli.min_river_merge);
     println!("  sea merge area   {} columns", cli.min_sea_merge);
     println!("  ocean map area   {} columns", cli.ocean_map_min_area);
-    if let Some(offset) = cli.max_below_sea_level {
+    if let Some(offset) = max_below_sea_level {
         println!("  water cutoff     sea level minus {offset}; covered water included");
     } else if cli.no_caves {
         println!("  cave water       skipped");
@@ -221,7 +235,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         .collect()
     };
     let scans = scan_all(scanner::ScanOptions {
-        caves: !cli.no_caves && cli.max_below_sea_level.is_none(),
+        caves: !cli.no_caves && max_below_sea_level.is_none(),
         min_surface_y: None,
     });
     println!();
@@ -245,7 +259,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         detected.source.as_str()
     };
 
-    if let Some(offset) = cli.max_below_sea_level {
+    if let Some(offset) = max_below_sea_level {
         let minimum = i32::from(sea_level) - i32::from(offset);
         println!("  keeping water surfaces at Y >= {minimum}, including covered rivers");
         // Detect level from exposed water first; apply the exact cutoff to each
@@ -287,6 +301,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             debug::lakes::write(&cli.output.join("debug/lakes"), &grid, &analysis, cli.map_scale)?;
         }
         water::lakes::apply(&mut regions, &analysis);
+        region_stats.recount(&regions, cli.min_river_merge, cli.min_sea_merge);
+    }
+    if max_below_sea_level.is_some() {
+        // Roof cover is final metadata, never an input to the hydrological
+        // grouping or lake reconstruction in the normal height-filtered mode.
+        water::coverage::annotate_covered_water(&mut regions, &grid);
         region_stats.recount(&regions, cli.min_river_merge, cli.min_sea_merge);
     }
     let regions_seconds = regions_started.elapsed().as_secs_f64();
@@ -586,6 +606,7 @@ mod tests {
             "water-analyzer", "--world", "world", "--max-below-sea-level", "10",
         ]).unwrap();
         assert_eq!(cli.max_below_sea_level, Some(10));
+        assert_eq!(cli.effective_max_below_sea_level(), Some(10));
         assert!(!cli.no_caves);
         assert!(Cli::try_parse_from([
             "water-analyzer", "--world", "world", "--max-below-sea-level", "10", "--no-caves",
@@ -601,8 +622,30 @@ mod tests {
         assert_eq!(cli.min_sea_merge, 10_000);
         assert_eq!(cli.ocean_map_min_area, 10_000);
         assert_eq!(cli.min_cave_body, 4_000);
-        assert_eq!(cli.max_below_sea_level, None);
+        assert_eq!(cli.effective_max_below_sea_level(), Some(10));
         assert!(!cli.no_caves);
+        assert!(!cli.include_deep_caves);
+    }
+
+    #[test]
+    fn legacy_cave_scan_requires_explicit_opt_in() {
+        let cli = Cli::try_parse_from([
+            "water-analyzer", "--world", "world", "--include-deep-caves",
+        ]).unwrap();
+        assert_eq!(cli.effective_max_below_sea_level(), None);
+        let surface_only = Cli::try_parse_from([
+            "water-analyzer", "--world", "world", "--no-caves",
+        ]).unwrap();
+        assert_eq!(surface_only.effective_max_below_sea_level(), None);
+        let custom = Cli::try_parse_from([
+            "water-analyzer", "--world", "world", "--max-below-sea-level", "5",
+        ]).unwrap();
+        assert_eq!(custom.effective_max_below_sea_level(), Some(5));
+        for conflicting in [vec!["--no-caves"], vec!["--max-below-sea-level", "10"]] {
+            let mut args = vec!["water-analyzer", "--world", "world", "--include-deep-caves"];
+            args.extend(conflicting);
+            assert!(Cli::try_parse_from(args).is_err());
+        }
     }
 
     #[test]
@@ -626,6 +669,7 @@ mod tests {
             ocean_map_min_area: config::OCEAN_MAP_MIN_AREA,
             no_caves: false,
             max_below_sea_level: None,
+            include_deep_caves: false,
             min_cave_body: config::MIN_CAVE_BODY_COLUMNS,
             min_sea_body: config::SEA_MIN_COLUMNS,
         };

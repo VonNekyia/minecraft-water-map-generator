@@ -86,9 +86,14 @@ to the floor, banded at 10 and 30 blocks. Every kind of water carries one, so a
 shallow sea reads `shallow` and a deep lake reads `deep`. `0xFF` is reserved for
 "not measured" and is not written by the current analyzer.
 
-`cave` means the water cannot see the sky: an underground pool or aquifer. Such a
-region sits *below* the surface, so at the same `x`/`z` the world may well look
-like dry land. Cave regions are always `kind == lake`.
+`cave` means at least 50% of the region's retained water columns cannot see the
+sky. In the default height-filtered scan it is assigned after classification:
+covered rivers, lakes, swamps and seas keep their own `kind` and other modifiers.
+Consumers must not infer `kind == lake` from this flag. The 2D `x`/`z` footprint
+can look like dry land from above. The PNG overview uses a separate measured
+cover mask to restrict dots to roofed water inside these footprints; this mask
+is not stored in the region-level binary format. The legacy unrestricted
+`--include-deep-caves` scan continues to classify roofed pools as lakes.
 
 New modifier bits are only ever appended, so an old reader can mask off bits it
 does not know and keep working.
