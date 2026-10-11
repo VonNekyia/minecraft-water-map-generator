@@ -132,6 +132,30 @@ impl Cli {
     }
 }
 
+/// The folder holding `level.dat` and `datapacks/` for a given region folder.
+///
+/// A 26.x world nests its dimensions: `world/dimensions/minecraft/overworld` holds
+/// the region files, while the world's own files stay in `world`. Anything else -
+/// a pre-26 layout, a folder somebody assembled by hand - is taken as it is.
+fn world_root(world: &std::path::Path) -> PathBuf {
+    let nested = world
+        .parent()
+        .and_then(|ns| ns.parent())
+        .is_some_and(|dims| dims.file_name().is_some_and(|name| name == "dimensions"));
+
+    if nested {
+        // world/dimensions/<namespace>/<dimension> -> world
+        world
+            .parent()
+            .and_then(|ns| ns.parent())
+            .and_then(|dims| dims.parent())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| world.to_path_buf())
+    } else {
+        world.to_path_buf()
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
     if let Err(e) = run(&cli) {
@@ -165,8 +189,14 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     }
     let threads = rayon::current_num_threads();
 
-    let level = world::level::read(&cli.world);
-    let registry = BiomeRegistry::build(&cli.world);
+    // level.dat and datapacks/ sit beside region/ in a pre-26 world, but two
+    // levels above it in a 26.x one, and the plugin hands us the dimension folder.
+    // Looking only beside region/ there means data version 0 and no datapack
+    // biomes - on a Terralith world, 55 known biomes instead of 151, which decides
+    // every fish's temperature.
+    let world_root = world_root(&cli.world);
+    let level = world::level::read(&world_root);
+    let registry = BiomeRegistry::build(&world_root);
 
     let mut files: Vec<PathBuf> = std::fs::read_dir(&region_dir)?
         .filter_map(|e| e.ok())
@@ -674,5 +704,29 @@ mod tests {
             min_sea_body: config::SEA_MIN_COLUMNS,
         };
         assert!(run(&cli).is_err());
+    }
+
+    #[test]
+    fn world_root_climbs_out_of_a_nested_dimension() {
+        assert_eq!(
+            world_root(Path::new("saves/world/dimensions/minecraft/overworld")),
+            PathBuf::from("saves/world")
+        );
+        assert_eq!(
+            world_root(Path::new("world/dimensions/terralith/the_nether")),
+            PathBuf::from("world")
+        );
+    }
+
+    #[test]
+    fn world_root_leaves_any_other_layout_alone() {
+        // Pre-26: region/ sits in the world folder itself.
+        assert_eq!(
+            world_root(Path::new("saves/world")),
+            PathBuf::from("saves/world")
+        );
+        // Shallow paths must not panic on a missing parent.
+        assert_eq!(world_root(Path::new("world")), PathBuf::from("world"));
+        assert_eq!(world_root(Path::new("")), PathBuf::from(""));
     }
 }
