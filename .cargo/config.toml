@@ -1,0 +1,12 @@
+# The Linux build, from a Windows machine, with nothing installed but rustup.
+#
+#   rustup target add x86_64-unknown-linux-musl
+#   cargo build --release --target x86_64-unknown-linux-musl
+#
+# rust-lld ships with the toolchain, so there is no cc, no mingw and no Docker to
+# install; link-self-contained brings rustup's own musl CRT. Without these two the
+# build stops at "linker `cc` not found", which is how an afternoon gets spent
+# rediscovering this.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes"]

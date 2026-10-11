@@ -84,7 +84,12 @@ pub fn classify(name: &str, waterlogged: bool, water_level: Option<u8>) -> Block
         return BlockClass::Solid;
     }
     if id == "water" {
-        return if water_level == Some(0) {
+        // A missing level means the default state, and water's default is a full
+        // source. Older worlds always wrote the property, so its absence used to
+        // mean a palette entry that could not be trusted; 26.x leaves out every
+        // default property instead, and a section of bare "minecraft:water" is
+        // precisely the open ocean this map exists to find.
+        return if water_level.unwrap_or(0) == 0 {
             BlockClass::Water
         } else {
             BlockClass::Solid
@@ -137,7 +142,9 @@ mod tests {
             assert!(!classify("minecraft:water", false, Some(level)).is_water());
             assert!(!classify("minecraft:water", true, Some(level)).is_water());
         }
-        assert!(!classify("minecraft:water", false, None).is_water());
+        // No level is the default state, which for water is a source block. This
+        // is how 26.x writes every still block, so excluding it hid open water.
+        assert!(classify("minecraft:water", false, None).is_water());
         assert!(!classify("minecraft:flowing_water", false, Some(0)).is_water());
         assert!(classify("minecraft:water", false, Some(0)).is_water());
         assert!(classify("minecraft:oak_stairs", true, None).is_water());

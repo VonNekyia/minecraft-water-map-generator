@@ -300,37 +300,69 @@ fn read_block_states(
 
     while let Some((tag, name)) = r.next_entry()? {
         match (tag, name) {
+            // A block palette comes in three shapes, and a world holds all three at
+            // once: every chunk Minecraft rewrites is saved in the newest one, so a
+            // reader that knows only the oldest goes blind a region file at a time.
+            //
+            //   1.21 and older   TAG_Compound  { Name: "minecraft:water", Properties: {..} }
+            //   26.x             TAG_Compound  { "": "minecraft:water" }
+            //                    TAG_Compound  { id: "minecraft:kelp", properties: {..} }
+            //   26.x             TAG_String    "minecraft:water"
+            //
+            // The string form is what a section gets once no block in it carries a
+            // property - open ocean, in other words, which is exactly the water
+            // this map is for.
             (TAG_LIST, "palette") => {
                 let (etag, n) = r.list_header()?;
-                if etag != TAG_COMPOUND {
-                    for _ in 0..n {
-                        r.skip_payload(etag)?;
-                    }
-                    continue;
-                }
-                for _ in 0..n {
-                    let mut entry = PaletteEntry {
-                        off: 0,
-                        len: 0,
-                        waterlogged: false,
-                        water_level: None,
-                    };
-                    while let Some((t2, n2)) = r.next_entry()? {
-                        match (t2, n2) {
-                            (TAG_STRING, "Name") => {
-                                let off = r.position() as u32 + 2; // skip u16 length
-                                let s = r.string()?;
-                                entry.off = off;
-                                entry.len = s.len() as u16;
-                            }
-                            (TAG_COMPOUND, "Properties") => {
-                                read_water_properties(r, &mut entry)?;
-                            }
-                            _ => r.skip_payload(t2)?,
+                match etag {
+                    TAG_STRING => {
+                        for _ in 0..n {
+                            let off = r.position() as u32 + 2; // skip the u16 length
+                            let s = r.string()?;
+                            scratch.palette.push(PaletteEntry {
+                                off,
+                                len: s.len() as u16,
+                                waterlogged: false,
+                                water_level: None,
+                            });
+                            pal_len += 1;
                         }
                     }
-                    scratch.palette.push(entry);
-                    pal_len += 1;
+                    TAG_COMPOUND => {
+                        for _ in 0..n {
+                            let mut entry = PaletteEntry {
+                                off: 0,
+                                len: 0,
+                                waterlogged: false,
+                                water_level: None,
+                            };
+                            while let Some((t2, n2)) = r.next_entry()? {
+                                match (t2, n2) {
+                                    // "Name" is the old spelling, "id" the new one, and
+                                    // the empty key is how a block with no properties
+                                    // is written now.
+                                    (TAG_STRING, "Name" | "id" | "") => {
+                                        let off = r.position() as u32 + 2;
+                                        let s = r.string()?;
+                                        entry.off = off;
+                                        entry.len = s.len() as u16;
+                                    }
+                                    (TAG_COMPOUND, "Properties" | "properties") => {
+                                        read_water_properties(r, &mut entry)?;
+                                    }
+                                    _ => r.skip_payload(t2)?,
+                                }
+                            }
+                            scratch.palette.push(entry);
+                            pal_len += 1;
+                        }
+                    }
+                    _ => {
+                        for _ in 0..n {
+                            r.skip_payload(etag)?;
+                        }
+                        continue;
+                    }
                 }
             }
             (TAG_LONG_ARRAY, "data") => {
@@ -352,7 +384,11 @@ fn read_water_properties(r: &mut NbtReader<'_>, entry: &mut PaletteEntry) -> Res
         if tag == TAG_STRING && name == "waterlogged" {
             entry.waterlogged = r.string()? == "true";
         } else if tag == TAG_STRING && name == "level" {
-            entry.water_level = r.string()?.parse().ok();
+            // A level that will not parse is recorded as an impossible one rather
+            // than as none, because none now means "the property was not written",
+            // which is the default state and therefore a source block. Garbage must
+            // not be read as a default.
+            entry.water_level = Some(r.string()?.parse().unwrap_or(u8::MAX));
         } else {
             r.skip_payload(tag)?;
         }
@@ -565,6 +601,80 @@ mod tests {
                     .class_at(0, 0, 0)
                     .is_water(),
                 level == "0"
+            );
+        }
+    }
+
+    /// Every shape a 26.x world writes, including the one that made the reader go
+    /// blind: a plain string list, which is what a section of open water becomes
+    /// once nothing in it carries a property.
+    #[test]
+    fn nbt_palette_is_read_in_every_shape_a_world_holds() {
+        fn string(buf: &mut Vec<u8>, s: &str) {
+            buf.extend_from_slice(&(s.len() as u16).to_be_bytes());
+            buf.extend_from_slice(s.as_bytes());
+        }
+
+        // (what it is called, the palette payload after the list header)
+        let shapes: Vec<(&str, Box<dyn Fn(&mut Vec<u8>)>)> = vec![
+            ("old Name", Box::new(|buf: &mut Vec<u8>| {
+                buf.push(TAG_COMPOUND);
+                buf.extend_from_slice(&1i32.to_be_bytes());
+                buf.push(TAG_STRING);
+                string(buf, "Name");
+                string(buf, "minecraft:water");
+                buf.push(TAG_END);
+            })),
+            ("new id", Box::new(|buf: &mut Vec<u8>| {
+                buf.push(TAG_COMPOUND);
+                buf.extend_from_slice(&1i32.to_be_bytes());
+                buf.push(TAG_STRING);
+                string(buf, "id");
+                string(buf, "minecraft:water");
+                buf.push(TAG_END);
+            })),
+            ("new empty key", Box::new(|buf: &mut Vec<u8>| {
+                buf.push(TAG_COMPOUND);
+                buf.extend_from_slice(&1i32.to_be_bytes());
+                buf.push(TAG_STRING);
+                string(buf, "");
+                string(buf, "minecraft:water");
+                buf.push(TAG_END);
+            })),
+            ("plain string list", Box::new(|buf: &mut Vec<u8>| {
+                buf.push(TAG_STRING);
+                buf.extend_from_slice(&1i32.to_be_bytes());
+                string(buf, "minecraft:water");
+            })),
+        ];
+
+        for (called, write) in shapes {
+            let mut buf = vec![TAG_LIST];
+            string(&mut buf, "palette");
+            write(&mut buf);
+            buf.push(TAG_END);
+
+            let mut scratch = ChunkScratch::new();
+            let (block_pal, block_data) =
+                read_block_states(&mut NbtReader::new(&buf), &mut scratch).unwrap();
+            assert_eq!(block_pal.1, 1, "{called}: palette length");
+            assert_eq!(
+                scratch.palette[0].name(&buf),
+                "minecraft:water",
+                "{called}: block name"
+            );
+
+            let meta = SectionMeta {
+                y: 0,
+                block_pal,
+                block_data,
+                biome_pal: (0, 0),
+                biome_data: PackedRef::default(),
+            };
+            let mut classes = Vec::new();
+            assert!(
+                classify_palette(&buf, &scratch.palette, &meta, &mut classes).has_water,
+                "{called}: water was not seen"
             );
         }
     }
